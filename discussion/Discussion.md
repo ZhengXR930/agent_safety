@@ -51,7 +51,7 @@
 
 【User】【2026-05-20】
 
-我希望基于 `idea/manual.md` 继续判断这个方向的创新性、可行性、实验怎么做、baseline 选什么，并根据 `idea/idea-template.md` 在 `idea/` 文件夹下生成新的 idea。
+我希望继续判断这个方向的创新性、可行性、实验怎么做、baseline 选什么，并根据 `idea/idea-template.md` 在 `idea/` 文件夹下生成新的 idea。
 
 【Agent】【2026-05-20】
 
