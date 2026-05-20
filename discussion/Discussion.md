@@ -1,53 +1,18 @@
 # Discussion：当前问题讨论区
 
 - **当前问题（一句话）：**
-  在确认单一 Agent Skill Ecosystems benchmark 说服力不足后，是否可以把研究重心转为跨 benchmark 的可验证授权链推理防御？
+  5 月 20 日之后，idea 是否应从“完整授权链形式化防御”进一步转向“小模型快速本地危险 tool-use guard”，并在一作确认后再更新 idea 文件？
 - **关联日志：**
-  - `LOGS/2026-W20.md` / `READ-2026W20-001`
   - `LOGS/2026-W21.md` / `READ-2026W21-001`
   - `LOGS/2026-W21.md` / `IDEA-2026W21-001`
 - **关联材料：**
-  - `/Users/bytedance/Downloads/Benign_in_Isolation__Harmful_in_Composition__Security_Risks_in_Agent_Skill_Ecosystems__3___Copy_ (1).pdf`
   - `idea/manual.md`
   - `idea/literature_assessment_2026-W21.md`
   - `idea/authorization-chain-rlvr.md`
 
 ---
 
-## Thread #1：Benchmark 可信度与防御工作的说服力
-
-【User】【2026-05-13】
-
-我阅读了论文 `Benign in Isolation, Harmful in Composition: Security Risks in Agent Skill Ecosystems`，觉得论文存在一些问题。这些问题可能影响之后在这个 benchmark 上做防御的可能性。进一步说，如果这篇论文没中稿，那么基于此设计的防御策略是否不具备说服力，也需要认真判断。
-
-主要疑问如下：
-
-1. 论文测试的模型是加上 tool 后由作者自己构建的吗？是否依赖某些特定 agent 框架？
-2. trace 是怎么采集和标注的？case 的来源是什么？筛选过程是什么？Mock sandbox 是什么？
-3. 这个工作和 memory 污染的区别是什么？
-
-【Agent】【2026-05-13】
-
-当前更稳妥的判断是：先不要直接假设该 benchmark 足以支撑防御论文，而是把它当作一个需要审计的研究对象。防御策略是否有说服力，不只取决于原论文是否中稿，也取决于 benchmark 是否满足以下条件：
-
-- agent/tool 构造方式清楚，并且不只绑定某个过窄的框架实现；
-- trace 采集、case 来源、筛选标准和人工/自动标注规则可复现；
-- mock sandbox 的安全边界明确，能够解释它与真实 agent 执行环境之间的差距；
-- 与 memory poisoning / memory pollution 的威胁模型边界清楚，避免只是换一个表述重复已有问题。
-
-**阶段性结论：**
-
-目前这个方向仍然可以继续探索，但下一步应优先做 benchmark audit，而不是立刻设计防御方法。只有当 benchmark 的构造逻辑、标注可信度和威胁模型边界被说明清楚后，基于它的防御策略才更容易形成独立说服力。
-
-**下一步：**
-
-- [ ] 回到论文中逐项定位 model/tool setup、agent framework、trace collection、annotation protocol、case source、filtering criteria、mock sandbox definition。
-- [ ] 写一段 threat model 对比：skill composition risk vs memory poisoning / memory pollution。
-- [ ] 判断是否需要自己补一个更可复现的 mini-benchmark，作为后续防御工作的 Pilot。
-
----
-
-## Thread #2：从单一 benchmark 防御转向 Authorization-Chain RLVR
+## Thread #1：Idea 转向：从单一 benchmark 防御到 Authorization-Chain RLVR
 
 【User】【2026-05-20】
 
@@ -55,7 +20,7 @@
 
 【Agent】【2026-05-20】
 
-这个问题和 5 月 13 日的 benchmark 可信度讨论是连续的。5 月 13 日的结论是：不要把防御工作的说服力押在单一 Agent Skill Ecosystems benchmark 上，因为它的 agent/tool 构造、trace 采集、case 来源、标注规则、mock sandbox 和 threat model 边界都还需要审计。现在的新判断是：这个方向可以继续，但研究对象应从“在某一个 benchmark 上做防御”升级为“跨 benchmark 的 agent action 授权链推理”。
+这是当前 idea 的第一次明确转向：研究对象不再是“在某一个 benchmark 上做防御”，而是升级为“跨 benchmark 的 agent action 授权链推理”。这个转向的核心是把单点 benchmark 依赖降级，把论文贡献放在 threat model 统一、结构化中间推理、以及可验证 reward 训练上。
 
 新的 idea 已整理为 `idea/idea_2026-05-20_authorization-chain-rlvr.md`，核心不再是泛化的 prompt injection detection，而是：
 
@@ -69,9 +34,9 @@
 - 训练一个 7B 级 Authorization Reasoner 输出结构化 JSON；
 - 用 symbolic validator + benchmark label 构造 RLVR 奖励，而不是只依赖 LLM-as-judge。
 
-**和 5 月 13 日讨论的关系：**
+**转向含义：**
 
-5 月 13 日担心的是：如果 Agent Skill Ecosystems benchmark 本身不够可靠，那么基于它做防御会不会缺少说服力。现在的方案是把该 benchmark 降级为一个 skill-composition 风险来源，而不是唯一实验基础；同时引入 AgentDojo、InjecAgent、ASB、SkillInject、AgentTrap、TraceSafe 等 benchmark，统一到 authorization-chain violation schema 下。这样即使某一个 benchmark 的构造存在争议，论文的核心贡献仍然可以落在跨数据源的 threat model 统一、结构化中间推理、以及可验证 reward 训练上。
+现在的方案是把单一 skill-composition benchmark 降级为一个风险来源，而不是唯一实验基础；同时引入 AgentDojo、InjecAgent、ASB、SkillInject、AgentTrap、TraceSafe 等 benchmark，统一到 authorization-chain violation schema 下。这样即使某一个 benchmark 的构造存在争议，论文的核心贡献仍然可以落在跨数据源的 threat model 统一、结构化中间推理、以及可验证 reward 训练上。
 
 **阶段性结论：**
 
@@ -83,16 +48,56 @@
 
 **下一步：**
 
-- [ ] 把 5 月 13 日的 benchmark audit 问题保留，但范围从单篇 Skill Ecosystems 扩展为“哪些 benchmark 有完整 trace、哪些只有 final IO、哪些需要重放 agent”。
-- [ ] 更新 `method.md`：形式化 Authorization DAG、trust lattice、scope containment、taint-flow 和 reward functions。
+- [ ] 梳理哪些 benchmark 有完整 trace、哪些只有 final IO、哪些需要重放 agent。
+- [ ] 暂缓更新 `method.md` 中完整的 Authorization DAG、trust lattice、scope containment、taint-flow 和 reward functions，避免过早把工作卡在大而全的理论定义上。
 - [ ] 构造 50 条统一 authorization trace schema，优先覆盖 `review -> install`、`scan -> modify`、`assess -> approve`、`tool return injection -> action`、`tainted data -> sink`、`wrong tool`、`scope exceeded` 七类场景。
 - [ ] 实现 symbolic validator 后，再决定是否进入 SFT / GRPO；如果 validator 不能稳定检查 chain validity，暂时不要训练。
 
 ---
 
+## Thread #2：Angus 对 baseline 与训练路线的调整建议
+
+【Angus】【2026-05-20】
+
+目前可以先推荐 [MemSifter](https://github.com/plageon/MemSifter) 作为一个 baseline 尝试或训练路线参考。它不是直接做 agent authorization defense，但它的“小模型代理推理 + outcome-driven ranking / RL 训练”思路可以借鉴：先把复杂授权链问题降到一个更可控的危险 tool use 分类或排序任务上，比较 SFT 和 RL 两条路线是否真的带来差异。
+
+当前先不要把“确定完整 method 数学形式化”作为最优先 TODO。也就是说，`idea/idea_2026-05-20_authorization-chain-rlvr.md` 里“在 `method.md` 形式化 Authorization DAG、trust lattice、scope containment 和 reward functions”这一项先划掉，避免过早把工作卡在大而全的理论定义上。
+
+更实际的下一步建议：
+
+- SFT 和 RL 都要尝试，先用同一批危险 tool use 样本做分类或排序对照。
+- 如果算力不足，优先用 LoRA / QLoRA 做小模型适配，不要一开始就假设必须全参训练。
+- Pilot 阶段先定义“危险 tool use 分类”：例如 benign / suspicious / unauthorized / scope-exceeded / tainted-sensitive-sink，再看这些标签是否能映射回后续的 authorization-chain violation。
+- MemSifter 可以作为工程 baseline 和训练参考，但论文定位上仍要小心：它更接近 memory retrieval / proxy reasoning，不应被写成现成的安全防御 baseline。
+
+---
+
+## Thread #3：Idea 转向：小模型快速本地危险 tool-use guard
+
+【Angus】【2026-05-20】
+
+在 Tainted / IFC / provenance 相关工作已经比较拥挤的情况下，idea 可以进一步转向“小模型快速本地反应”。重点不再是声称提出全新的 taint tracking 或完整 runtime provenance system，而是训练一个可本地部署的小型 authorization / dangerous-tool-use guard，在每次危险 tool call 前快速判断是否存在授权违规或高风险执行。
+
+新的核心卖点可以是：
+
+- 与闭源大模型 judge 对比，安全判断性能不明显下降，但 p50 / p95 latency、调用成本、隐私暴露和部署可控性明显更好。
+- 小模型可以本地部署，agent trace、tool arguments、用户上下文不必发给闭源 API，更适合高频 tool-call boundary 检查。
+- Pilot 先做危险 tool use 分类或排序，而不是一开始追求完整 Authorization DAG 形式化。
+- SFT 和 RL 都要尝试；如果算力不足，先用 LoRA / QLoRA 验证小模型是否能接近闭源模型 judge。
+- `Tainted` 保留为风险维度之一，但不作为主创新；主创新更偏“快速、本地、低成本、接近闭源 judge 的危险 tool-use 判别器”。
+
+**待确认事项：**
+
+- 该转向需要先给一作确认。
+- 在一作确认前，暂不修改 `idea/idea_2026-05-20_authorization-chain-rlvr.md` 或 `idea/idea.md`。
+- 确认后再把 idea 文件从 “Verifiable Authorization-Chain Reasoning” 调整为 “Fast Local Authorization Guards / Dangerous Tool-Use Guard” 方向。
+
+---
+
 ## Agent 维护区
 
-- 2026-05-13：新增 `LOGS/2026-W20.md` 的 `READ-2026W20-001`，记录本周围绕 Agent Skill Ecosystems benchmark 的阅读疑问与下一步计划。
 - 2026-05-17：新增 `LOGS/2026-W20.md` 的 `READ-2026W20-002`，记录对 AgentLAB 论文与代码仓库的数据结构、tool-call 评测机制与五类攻击构造方式的拆解。
-- 2026-05-20：新增 `LOGS/2026-W21.md` 的 `READ-2026W21-001` 和 `idea/literature_assessment_2026-W21.md`，记录 authorization-chain RLVR 防御想法的第一轮文献判断：方向可行，但创新点应聚焦在可验证授权链推理，而不是泛化的 prompt injection 防御。
+- 2026-05-20：新增 `LOGS/2026-W21.md` 的 `READ-2026W21-001` 和 `idea/literature_assessment_2026-W21.md`，记录第一次 idea 转向：authorization-chain RLVR 防御想法可行，但创新点应聚焦在可验证授权链推理，而不是泛化的 prompt injection 防御。
 - 2026-05-20：新增 `idea/authorization-chain-rlvr.md`，根据 `idea/idea-template.md` 将当前想法整理成正式 idea 卡片；对应日志为 `LOGS/2026-W21.md` / `IDEA-2026W21-001`。
+- 2026-05-20：新增 Angus 对 baseline 与训练路线的建议：先把 MemSifter 作为 baseline / 训练参考尝试；SFT 与 RL 都做；算力不足先 LoRA；Pilot 从危险 tool use 分类开始。
+- 2026-05-20：新增第二次 idea 转向 session：考虑从完整授权链形式化进一步转为“小模型快速本地危险 tool-use guard”；待一作确认后再更新 idea 文件。

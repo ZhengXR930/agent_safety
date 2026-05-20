@@ -114,6 +114,7 @@
   - [A Framework for Formalizing LLM Agent Security](https://arxiv.org/abs/2603.19469) — 相关形式化框架，尤其是 task alignment、action alignment、source authorization、data isolation。
   - [ClawGuard: A Runtime Security Framework for Tool-Augmented LLM Agents Against Indirect Prompt Injection](https://arxiv.org/abs/2604.11790) — runtime boundary enforcement baseline。
   - [Reinforcement Learning with Verifiable Rewards Implicitly Incentivizes Correct Reasoning in Base LLMs](https://arxiv.org/abs/2506.14245) — RLVR 机制依据，用于支撑 symbolic reward 训练 authorization reasoning。
+  - [MemSifter: Offloading LLM Memory Retrieval via Outcome-Driven Proxy Reasoning](https://github.com/plageon/MemSifter) — 可先作为 baseline / 训练路线参考尝试：其 pipeline 使用 embedding 预筛 + 小型生成式 reranker，并用 DAPO-style RL 做 outcome-driven ranking；本项目可借鉴其 SFT/RL 对照与轻量模型训练方式，先把高风险 tool use 判别做成分类或排序任务。
   - 其它：后续需要补一个 100 篇文献矩阵，按 Attack / Benchmark / Defense / Formal Security / RLVR 五类整理。
 
 
@@ -122,7 +123,7 @@
 > 把 idea 阶段已经明确的「下一步行动」列出来，方便后面直接推进。
 
 - 接下来 1–3 个可以做的小步骤：
-  1. 在 `method.md` 形式化 Authorization DAG、trust lattice、scope containment 和 reward functions。
+  1. ~~在 `method.md` 形式化 Authorization DAG、trust lattice、scope containment 和 reward functions。~~
   2. 新建 `data/authorization_trace_schema.json`，定义统一 trace / manifest / proposed action / label schema。
   3. 实现 `code/validator.py` 的最小版本，先支持 50 条手写或半自动构造的 authorization traces。
 
@@ -130,4 +131,3 @@
   - `warn` 与 `block` 的边界如何定义，尤其是用户授权动作但 body 含 untrusted content 的情况？
   - 哪些 benchmark 有完整 trace，哪些只有最终输入输出，需要额外重放 agent 才能得到 authorization chain？
   - 在已有 Task Shield / RTBAS / MiniScope / ClawGuard 等 baseline 下，本方法的优势场景到底是条件授权、多步 evidence laundering，还是跨 benchmark 泛化？
-
