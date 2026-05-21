@@ -19,3 +19,7 @@
 
 - 首次由 `bootstrap.md` 写入。
 - 后续若用户明确说"切换为新手/老手模式"，更新本文件并立即生效。
+
+## Protocol merge note
+
+- `2026-05-20`: Upgraded repository protocol files from `AngusDujw/Angus-Research-Protocol` while preserving `mode: newbie` and existing research discussions.

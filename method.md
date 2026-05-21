@@ -47,4 +47,16 @@
 ## 5. 与实验日志对齐
 
 - 对应 `LOGS/YYYY-Www.md` 中实验 ID：\[EXP-...\]
-- 每次方法有实质变更时，更新本文件并在日志里回链。
+- 每次方法有实质变更时，更新本文件并在 § 6 Changelog 追加一行。
+
+---
+
+## 6. Changelog（每次实质变更必填）
+
+> 实质变更 = 改公式 / 改假设 / 改 theorem 陈述 / 替换 loss 项 / 改超参定义。**纯文字润色不必记录**。
+
+| 日期 | 改动摘要 | 触发原因 | 关联议题 | 关联实验 | 操作人 |
+|---|---|---|---|---|---|
+| YYYY-MM-DD | 例：在 $\mathcal L_{defense}$ 中加入 Lipschitz 约束 $\lambda \|\nabla_x f\|$ | 例：`EXP-2026W10-003` 显示原始项对 PGD 不鲁棒 | `DISC-2026W10-002` | `EXP-2026W10-003,004` | `PI @TODO` |
+
+> Merge note (2026-05-20): protocol structure upgraded from `AngusDujw/Angus-Research-Protocol`; no substantive method formula, assumption, or theorem was changed in this merge.
