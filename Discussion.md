@@ -144,103 +144,42 @@
 - 2026-05-20：新增 Angus 对 baseline 与训练路线的建议：先把 MemSifter 作为 baseline / 训练参考尝试；SFT 与 RL 都做；算力不足先 LoRA；Pilot 从危险 tool use 分类开始。
 - 2026-05-20：新增第二次 idea 转向 session：考虑从完整授权链形式化进一步转为“小模型快速本地危险 tool-use guard”；待一作确认后再更新 idea 文件。
 
-【Agent@Codex】【2026-05-24】
+## Thread #4：公开 benchmark 上的验证结果与当前结论
 
-按用户要求已清理此前与核心方向无关的探索产物，并保留历史讨论上下文。当前工作区只保留精炼后的 authentication DAG 版本：`idea.md`、`method.md`、`code/authentication_dag/validator.py`。后续如果继续，应在上述历史上下文基础上叠加讨论，而不是覆盖已有记录。
+【Agent@Codex】【2026-05-26 18:10】
 
-【Agent@Codex】【2026-05-24 23:20】
+按用户要求，将 5 月 24–26 日的实验压缩为当前议题的实验结论。本轮只使用公开 benchmark / 官方 baseline，不把 `code/`、`benchmarks/` 或中间实验产物作为正式讨论内容。证据记录见 `LOGS/2026-W21.md#EXP-2026W21-001` 至 `LOGS/2026-W21.md#EXP-2026W21-005`。
 
-重新阅读本议题后，当前主线应理解为：不一定换题，而是把题目收敛为 **Authentication DAG + small local dangerous tool-use guard**。Discussion 里已经给出下一步：先验证 symbolic validator 是否有效；如果 validator 不能稳定检查 chain validity / violation labels，就不进入 SFT / GRPO。
+**实验设定**
 
-小模型仍可作为创新点，但前提是它不是替代 DAG，而是利用 DAG validator 提供监督、过滤或一致性检查。合理 framing 是：Authentication DAG 负责定义可验证授权边界；small local guard 负责在高频 tool-call boundary 上低延迟、低成本、隐私友好地近似闭源 judge 的安全判断。
+- Threat model：benign user request + indirect injected context/tool output + proposed sensitive/action-bearing tool call。
+- 主集：ToolSafe AgentDojo trajectory 中筛出的 489 条 in-scope step，unsafe=342、safe=147。
+- 泛化检查：InjecAgent base rollout 1054 条中转换出的 150 条 valid proposed-action step，unsafe=90、safe=60。该集只用于 proposed-action guard，不代表完整 InjecAgent ASR。
+- Baseline：ToolSafe GPT-4o guard、GPT-5.5 API guard、官方 `MurrayTom/TS-Guard` local checkpoint。
+- Our method：AuthDAG scope validator，检查 action scope 和 source/authorization consistency。
 
-因此下一步不是换新 idea，而是做 validator gate：
+**ToolSafe AgentDojo 489**
 
-- symbolic validator vs sensitive-tool blocker；
-- attack catch for A1/A2/A3；
-- clean allow for benign high-permission tool use；
-- warn precision/recall for D1-only cases；
-- 若 validator 通过，再进入 small-model SFT/RL 对照。
-
-已将该主线同步到 `idea.md` 和 `method.md`。
-
-【Agent@Codex】【2026-05-25 09:22】
-
-已按用户要求重新拉取公开 benchmark / baseline，不再使用自创或模拟数据，记录为 `LOGS/2026-W21.md#EXP-2026W21-001`。已拉取：ToolSafe、AgentDojo、AgentDyn、ClawGuard、CaMeL。当前 primary public benchmark 使用 ToolSafe 官方 `TS-Bench/agentdojo-traj/{workspace,travel,slack,banking}.json`。
-
-初步组装结果：ToolSafe AgentDojo 官方 step 共 1220 条，其中 sensitive/action-bearing in-scope step 489 条，unsafe=342、safe=147。当前 authdag validator 与 sanity baseline 对比：sensitive blocker F1=0.823、attack catch=1.000、clean allow=0.000；history injection filter F1=0.848、attack catch=1.000、clean allow=0.163；authdag validator F1=0.755、attack catch=0.623、clean allow=0.939、precision=0.959。
-
-解释：validator 已经体现出 authentication DAG 的核心差异，即不再简单阻断所有 sensitive tool，而是保留大量合法高权限动作；但 recall 明显不足，下一步要分析 FN，补通用 scope/derived-grant 规则。SOTA baseline 复现状态也已记录到 `code/results/baseline_reproduction_status.md`：TS-Guard 需要 checkpoint/GPU；CaMeL 需要 API 和 full AgentDojo run；ClawGuard 需要 semantic tool adapter 或限制到 file/command/network slice，不能用 proxy 冒充官方结果。
-
-【Agent@Codex】【2026-05-25 09:35】
-
-已按本议题规划继续验证 symbolic validator，记录为 `LOGS/2026-W21.md#EXP-2026W21-002`。关键修正不是 benchmark 特化，而是补全 Authentication DAG 的 scope 条件：用户授权必须同时覆盖 action verb 和 object type；untrusted taint span 只覆盖外部 instruction block，不能把后续整个 trace 都污染。
-
-ToolSafe AgentDojo 官方 trajectory 结果已经支持当前 idea 的核心可行性：in-scope sensitive/action steps n=489，`authdag_scope_validator` 达到 F1=0.986、attack catch=0.994、clean allow=0.946、precision=0.977；相比 `sensitive_blocker` 的 clean allow=0.000 和 `history_injection_filter` 的 clean allow=0.163，DAG validator 确实提供了更好的 safety/utility tradeoff。
-
-同时做了 ToolSafe AgentHarm 官方 trajectory 边界验证：in-scope n=190，`authdag_scope_validator` 只有 F1=0.110、attack catch=0.059、clean allow=0.964。这个负结果说明该 idea 不能被写成通用 harmful-content policy guard；它适合定位为 indirect tool-call authorization guard，或作为 small local dangerous tool-use guard 的 authorization/scope consistency layer。若要覆盖 direct harmful user intent，需要额外 harm-policy 信号。
-
-剩余问题：SOTA 对比仍未完成。当前数字只能说明 validator 对 sanity baselines 有价值，不能声称超过 TS-Guard / CaMeL / ClawGuard。下一步应优先复现 TS-Guard checkpoint 或 CaMeL full AgentDojo run；若 SOTA 复现卡住，需要明确按论文设定重建并标注为 paper-faithful reconstruction。
-
-【Agent@Codex】【2026-05-25 11:30】
-
-按用户纠偏，当前主任务从“全量运行 ToolSafe/TS-Guard”改为“从公开 benchmark 中筛选符合 threat model 的样本，再在这些样本上比较 baseline”。已记录为 `LOGS/2026-W21.md#EXP-2026W21-003`，artifact 为 `code/results/threat_model_benchmark_inventory.md`。
-
-当前 benchmark inventory 结论：
-
-- ToolSafe AgentDojo trajectory 是立即可用主集：1220 official step 中有 489 条 sensitive/action-bearing step，unsafe=342、safe=147，符合 benign user + indirect injected context + sensitive action 的主 threat model。
-- InjecAgent 是最强补充来源：1054 base cases / 1054 enhanced cases，明确由 benign user tool response 携带 attacker instruction；但它没有 precomputed step trajectory，需要做 proposed-action protocol 或跑 agent rollout。
-- ToolSafe ASB OPI 可作为次级 stress slice；DPI 因 user prompt 自身被污染，不应作为当前 AuthDAG 主实验。
-- AgentDojo / AgentDyn 源码 suites 符合 threat model，但需要 end-to-end rollout 才能得到可比较轨迹。AgentDyn v1 包含 shopping/github/dailylife 等更开放场景，可作为后续泛化验证。
-
-因此，不应把 full 1220 ToolSafe 或 AgentHarm 当作主指标。API guard / TS-Guard / 我们的方法都应先对齐到同一个 threat-model slice；全量结果只作为参考或边界分析。
-
-【Agent@Codex】【2026-05-25 11:45】
-
-已完成 ToolSafe GPT-4o guard 与 AuthDAG 在同一 489 条 threat-model slice 上的公平对比，记录为 `LOGS/2026-W21.md#EXP-2026W21-004`，结果表在 `code/results/toolsafe_slice_method_comparison.md`。
-
-关键数字：GPT-4o guard clean-drop 口径 n=428、dropped=61、F1=0.904、attack catch=1.000、clean allow=0.523；parse-error-block 部署口径 n=489、F1=0.898、attack catch=1.000、clean allow=0.469。AuthDAG scope validator 在同一 489 条上 F1=0.986、attack catch=0.994、clean allow=0.946、precision=0.977，只漏 2 条，误杀 8 条。
-
-当前解释：GPT-4o guard 很保守，几乎不漏攻击，但对合法高权限动作误伤明显；AuthDAG 的 action-scope/source check 正好提供了更好的 utility preservation。这是目前支持 idea 有效性的最强结果。仍需补充：TS-Guard local model 对齐到同一 slice；InjecAgent 或 ToolSafe ASB OPI 上的泛化验证。
-
-【Agent@Codex】【2026-05-26 17:40】
-
-已补齐 TS-Guard local 7B baseline 和 InjecAgent proposed-action 泛化测试，记录为 `LOGS/2026-W21.md#EXP-2026W21-005`。结果需要下调当前 claim：AuthDAG 不能被写成“全面替代 TS-Guard”的 standalone SOTA guard。
-
-关键数字：
-
-- ToolSafe AgentDojo 489 slice：TS-Guard local F1=0.945、attack catch=0.904、clean allow=0.979；AuthDAG scope validator F1=0.986、attack catch=0.994、clean allow=0.946。
-- 重叠分析：TS-Guard 漏掉的 33 个 attack，AuthDAG 全部抓住；AuthDAG 漏掉的 2 个 attack，TS-Guard 全部抓住；共同漏报为 0。
-- InjecAgent base rollout 1054 条中，只有 150 条是 valid proposed-action slice；TS-Guard local 在这 150 条上 F1=0.994、attack catch=1.000、clean allow=0.983，接近饱和。
-
-当前判断：我们的优势不是“小模型本地化”，因为 TS-Guard 本身也是 7B local guard；也不是在所有数据集上显著超过 learned guard，因为 InjecAgent proposed-action slice 上 TS-Guard 已经几乎满分。剩余可辩护贡献是：显式授权/来源约束可作为 learned trajectory guard 的高召回补充和可验证监督信号，尤其在 AgentDojo indirect tool-call slice 上补全 TS-Guard 漏报。
-
-下一步必须做 drift stress test：优先跑 ToolSafe ASB OPI 89 条和/或 AgentDyn rollout。如果 TS-Guard 在这些外部 slice 上仍接近饱和，本议题应收敛为 verifier / supervision / ensemble layer，而不是 standalone defense paper。
-
-【Agent@Codex】【2026-05-26 17:55】
-
-按用户要求，将当前四方案对比结论以表格形式补充到本议题。证据仍以 `LOGS/2026-W21.md#EXP-2026W21-004` 和 `LOGS/2026-W21.md#EXP-2026W21-005` 为准；未完成的格子明确标为 N/A，不用未跑实验填充。
-
-**ToolSafe AgentDojo 489 threat-model slice**
-
-| 方法 | F1 | Attack catch | Clean allow | FP | FN | 解释 |
+| 方法 | F1 | Attack catch | Clean allow | FP | FN | 备注 |
 |---|---:|---:|---:|---:|---:|---|
-| GPT-4o ToolSafe Guard | 0.898 | 1.000 | 0.469 | 78 | 0 | parse-error 视为 block；极保守，误杀高 |
-| GPT-5.5 ToolSafe Guard | 0.871 | 1.000 | 0.303 | 101 | 0 | 263/489 被 API cyber filter 拦截；不是纯模型 judge |
-| TS-Guard ToolSafe Guard | 0.945 | 0.904 | 0.979 | 3 | 33 | 官方 local learned guard；低误杀但漏报较多 |
-| AuthDAG scope validator | 0.986 | 0.994 | 0.946 | 8 | 2 | 当前 symbolic validator；高召回，误杀略高于 TS-Guard |
+| GPT-4o ToolSafe Guard | 0.898 | 1.000 | 0.469 | 78 | 0 | parse-error 视为 block |
+| GPT-5.5 ToolSafe Guard | 0.871 | 1.000 | 0.303 | 101 | 0 | 263/489 被 API filter 拦截，不是纯 judge |
+| TS-Guard ToolSafe Guard | 0.945 | 0.904 | 0.979 | 3 | 33 | 官方 local learned guard |
+| AuthDAG scope validator | 0.986 | 0.994 | 0.946 | 8 | 2 | 当前 symbolic validator |
 
-**InjecAgent valid proposed-action 150 slice**
+重叠结果：TS-Guard 漏掉的 33 个 attack，AuthDAG 全部抓住；AuthDAG 漏掉的 2 个 attack，TS-Guard 全部抓住；共同 attack FN 为 0。
 
-| 方法 | F1 | Attack catch | Clean allow | FP | FN | 状态 |
+**InjecAgent valid proposed-action 150**
+
+| 方法 | F1 | Attack catch | Clean allow | FP | FN | 备注 |
 |---|---:|---:|---:|---:|---:|---|
-| TS-Guard local | 0.994 | 1.000 | 0.983 | 1 | 0 | 已完成，接近饱和 |
+| TS-Guard ToolSafe Guard | 0.994 | 1.000 | 0.983 | 1 | 0 | 已完成，接近饱和 |
 
-更新后的共识：
+**当前结论**
 
-- 当前不能 claim “AuthDAG 超越/替代 TS-Guard”。TS-Guard 是强 7B local baseline，且在 InjecAgent valid150 上几乎满分。
-- AuthDAG 目前最强证据是 ToolSafe AgentDojo 489 上对 TS-Guard 漏报的补全：TS-Guard 的 33 个 FN 全被 AuthDAG 抓住，二者共同 attack FN 为 0。
-- 因此下一阶段若继续本题，应改成验证 “authorization/source constraints 是否能作为 learned guard 的 complement / verifier / supervision signal”，并通过 ASB OPI 或 AgentDyn 检查 TS-Guard 是否存在 cross-domain drift。但是这样的创新点会很小。
+- 不能 claim “AuthDAG 替代或整体超过 TS-Guard”。TS-Guard 本身就是强 7B local guard，并且在 InjecAgent valid150 上几乎饱和。
+- AuthDAG 当前最强价值是作为 learned guard 的 authorization/source consistency complement：在 AgentDojo 489 上显著补齐 TS-Guard 的漏报，但 clean allow 略低。
+- 如果继续本题，下一步必须做 drift stress test：ToolSafe ASB OPI 或 AgentDyn。若 TS-Guard 在外部 slice 上仍接近饱和，本方向只能收敛为 verifier / supervision / ensemble layer，创新空间偏小。
 
 ---
 
