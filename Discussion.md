@@ -227,7 +227,7 @@ ToolSafe AgentDojo 官方 trajectory 结果已经支持当前 idea 的核心可�
 |---|---:|---:|---:|---:|---:|---|
 | GPT-4o ToolSafe Guard | 0.898 | 1.000 | 0.469 | 78 | 0 | parse-error 视为 block；极保守，误杀高 |
 | GPT-5.5 ToolSafe Guard | 0.871 | 1.000 | 0.303 | 101 | 0 | 263/489 被 API cyber filter 拦截；不是纯模型 judge |
-| TS-Guard local | 0.945 | 0.904 | 0.979 | 3 | 33 | 官方 local learned guard；低误杀但漏报较多 |
+| TS-Guard ToolSafe Guard | 0.945 | 0.904 | 0.979 | 3 | 33 | 官方 local learned guard；低误杀但漏报较多 |
 | AuthDAG scope validator | 0.986 | 0.994 | 0.946 | 8 | 2 | 当前 symbolic validator；高召回，误杀略高于 TS-Guard |
 
 **InjecAgent valid proposed-action 150 slice**
