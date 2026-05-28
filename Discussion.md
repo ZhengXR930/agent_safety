@@ -183,6 +183,25 @@
 
 ---
 
+## Thread #5：转向 adaptive attack 评估 TS-Guard 鲁棒性
+
+【Lead@Angus】【2026-05-28 18:08】
+
+当前建议：下一步优先探索 adaptive attack 方向，目标是检验能否在更严格、更贴近真实部署的设置下显著降低 TS-Guard 的防御效果。核心动机是：TS-Guard 的训练 reward 直接来自 step-level ground truth labels（如 malicious user request、being attacked、harmfulness rating），而真实部署中攻击者不会提供这样的 oracle；同时，攻击者可以针对 learned guard 的判断模式自适应地修改 prompt / tool output / proposed action context。
+
+具体路线分两步：
+
+1. 先调研并复现现有 adaptive attack baseline，判断是否已有方法能有效攻击 TS-Guard-style learned tool-use guard。
+2. 如果没有直接适配 TS-Guard / step-level tool invocation guard 的强 baseline，则以single armed bandit theorem或 contextual bandit 为理论基石，提出一种 adaptive authorization-laundering attack：攻击者在有限 query budget 下选择不同的语义保持变换，逐步寻找能绕过 TS-Guard 的 tool-use context。
+
+当前倾向的科学问题不是“训练一个更强 guard”，而是：
+
+> learned tool-use guards 在静态 benchmark 上接近饱和后，是否仍会被低预算 adaptive attacker 通过 authorization laundering 系统性绕过？
+
+如果实验表明 TS-Guard 在 adaptive setting 下 attack catch 明显下降，则论文可以定位为：现有 learned tool-use guard 的高静态精度不能代表 adaptive robustness；需要引入 authorization provenance / user-rooted derivation 这类更结构化的安全变量。
+
+---
+
 ## Resolution（关闭议题时必填）
 
 > Status 切到 `Resolved` 时，本节必须全部填好；否则不许关闭。
