@@ -128,6 +128,120 @@ The current ToolSafe/AgentDojo validator uses two deterministic checks:
 This is still a benchmark-facing approximation rather than the final learned
 guard. It deliberately avoids using benchmark labels inside the decision rule.
 
+### 5.2 MCP / Skill Poisoning Adaptation
+
+For third-party MCP tools or skills, the manifest itself may be untrusted. The
+validator therefore separates two contracts:
+
+```text
+trusted host contract: tool name, expected purpose, allowed side effects
+extension-provided contract: description/schema/instructions supplied by MCP or skill
+```
+
+The extension-provided contract may help describe utility, but it cannot create
+new action authority. Under this setting the four violations specialize as:
+
+- `A1 Untrusted Tool Authority`: the proposed action invokes a third-party
+  wrapper tool whose extension-provided contract contains extra imperative
+  authority, side-effect requirements, or hidden prerequisites not derived from
+  the user grant or trusted host contract.
+- `A2 Metadata-to-Action Escalation`: poisoned metadata/schema/output is used
+  to introduce an additional tool action, such as "before using read_file,
+  call write_file/move_file/read_file on an unrelated target."
+- `A3 Scope Overreach`: the action class is relevant to the user task, but a
+  concrete target/sink/recipient/file/name/branch/ref/id differs from the
+  user-granted target or comes from poisoned metadata. This is a role-level
+  argument check, not a generic "new string" blocker.
+- `D1 Metadata-Tainted Sink/Payload`: a sensitive payload or sink is copied
+  from untrusted metadata into an otherwise authorized call.
+
+This adaptation makes the wrapper-tool case explicit. In a strict runtime
+interpretation, wrapper-only calls are allowed unless they execute a visible
+A2/A3/D1 side effect. In a conservative supply-chain interpretation, invoking
+a poisoned wrapper is already `A1`, because the tool contract itself is not a
+trusted authorization source.
+
+To avoid benchmark-specific hard coding, a tool manifest should expose only a
+compact set of authorization roles:
+
+| Role | Meaning | Typical evidence |
+|---|---|---|
+| `operation` | what capability/effect is invoked | read/write/send/execute/create/delete/query/navigate |
+| `scope` | the bounded object or constraint of that operation | resource, destination, selector, location, account, time range |
+| `content` | data crossing a trust boundary | payload, command/code string, returned facts, generated body |
+| `context` | state used as authority | prior call, session freshness, tool version, identity, dependency condition |
+
+Concrete parameters such as `path`, `selector`, `ticker`, `token`, or
+`contract_version` are not taxonomy classes. They are domain-specific fields
+that a manifest annotator maps into one of the four roles above. This is the
+intended generalization point: the symbolic validator reasons over roles, while
+the manifest layer normalizes diverse tool schemas into those roles.
+
+The runtime contract is therefore:
+
+```text
+tool schema / metadata / trace
+  -> manifest annotator
+  -> {operation, scope, content, context}
+  -> AuthDAG verifier
+  -> A1/A2/A3/D1
+```
+
+Only the annotator may inspect concrete field names or domain wording. The
+verifier must not branch on names such as `selector`, `ticker`, `path`, or
+`token`; it only checks whether a role is user-rooted, metadata-tainted,
+scope-preserving, or used as authority.
+
+### 5.3 Role-Manifest Annotation Protocol
+
+The manifest annotator outputs role claims rather than a single label:
+
+```json
+{
+  "role": "operation | scope | content | context",
+  "source": "user | trusted_host | extension | tool_return | agent_action",
+  "value": "...",
+  "evidence": "...",
+  "relation": "grants | requires | taints | constrains | depends_on"
+}
+```
+
+The roles remain compact:
+
+- `operation`: capability or effect class requested or invoked.
+- `scope`: bounded object, destination, target, account, selector, location, or
+  other constraint on an operation.
+- `content`: data crossing a trust boundary, including command/code payloads,
+  returned facts, messages, generated body, or sensitive material.
+- `context`: state used as authority, including prior calls, freshness,
+  identity, tool version, or dependency conditions.
+
+The source and relation fields are essential. For example, a `scope` claim from
+the user with relation `grants` is allowed authority, while the same `scope`
+claim from extension metadata with relation `constrains` is untrusted and can
+trigger A3 if copied into an action. A `context` claim from extension metadata
+with relation `depends_on` is evidence, not authority, and can trigger A2 if it
+forces an extra tool call.
+
+This gives a clean learning target for future annotators:
+
+```text
+input:  MCP/skill schema, user task, tool return, or proposed action
+output: set of role claims
+reward: role/source/relation exactness + AuthDAG consistency
+```
+
+The optimized MCP validator has two tiers:
+
+1. **Single-action checks** over `operation`, `scope`, and `content`.
+2. **Trace/state checks** over `context`, with taint propagated into `content`
+   or `scope` when a prior observation controls a downstream action.
+
+This keeps A1/A2/A3/D1 as the top-level violation schema while preventing an
+over-narrow implementation that only inspects the current tool name and
+arguments. It also prevents overfitting to a long list of hand-written argument
+names.
+
 ## 6. Small Local Guard Framing
 
 If the symbolic validator passes the next validation gate, it can support a
@@ -174,6 +288,21 @@ not viable as a standalone universal harmful-content policy guard.
 
 ## Changelog
 
+- 2026-05-28: Replaced fine-grained MCP manifest roles with the compact
+  `operation/scope/content/context` taxonomy after generalization audit.
+  Linked experiment: `LOGS/2026-W22.md#EXP-2026W22-006`.
+- 2026-05-28: Added the role-manifest verifier contract and first MCPTox /
+  MCP-SafetyBench portability result. Linked experiment:
+  `LOGS/2026-W22.md#EXP-2026W22-007`.
+- 2026-05-28: Added the role-manifest annotation protocol and built the first
+  oracle/silver annotation seed set. Linked experiment:
+  `LOGS/2026-W22.md#EXP-2026W22-008`.
+- 2026-05-28: Optimized the MCP / skill poisoning schema with explicit
+  trace/state requirements after MCP-SafetyBench oracle-replay validation.
+  Linked experiment: `LOGS/2026-W22.md#EXP-2026W22-004`.
+- 2026-05-28: Added MCP / skill poisoning adaptation of A1/A2/A3/D1 after
+  MCPTox chain-level validation. Linked experiment:
+  `LOGS/2026-W22.md#EXP-2026W22-002`.
 - 2026-05-25: Added the public-benchmark validator approximation and empirical
   boundary from ToolSafe AgentDojo / AgentHarm validation. Linked experiment:
   `LOGS/2026-W21.md#EXP-2026W21-002`.
