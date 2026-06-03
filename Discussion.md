@@ -308,6 +308,105 @@ PAIR/TAP/SoC 是 generic adaptive search；我们的目标不是再做一个 pro
 - 如果 operational ambiguity 与 attack success 无相关性，则 “intent ambiguity 是根因” 的 claim 不成立，只能退回 adaptive robustness audit。
 - 当前 PAIR adapter 允许改写 history 和 rationale，是较强 attacker；后续需要收紧到“攻击者只控制一个 untrusted source 内容”，再评估 ASR。
 
+【Agent@Codex】【2026-06-03 00:00】
+
+补充 TS-Guard 在 ToolSafe ASB 静态全量上的官方复现结果，见 `LOGS/2026-W23.md#EXP-2026W23-001`。
+
+ASB `all` 共 5231 条已完整跑完，`meta_data/preds/labels` 长度均为 5231。TS-Guard strict binary 指标很强：
+
+- ASB all：accuracy=0.952，F1=0.950，recall=0.940，confusion 为 TP=2383 / TN=2598 / FP=98 / FN=152。
+- DPI-success：n=2293，F1≈0.951。
+- OPI-success：n=2509，F1≈0.950，recall≈0.928。
+- attack-failure：n=429，clean allow≈0.993。
+
+这说明 TS-Guard 在静态 ASB benchmark 上已经接近饱和，尤其 OPI-success 也没有明显失败。因此当前工作的动机不应写成“TS-Guard 在公开静态 benchmark 上检测差”，而应写成：
+
+> 静态 benchmark 高分不代表 adaptive robustness；需要在固定 threat model 和 query budget 下测试 learned / LLM step-level guard 是否能被 adaptive attack 系统性降分或绕过。
+
+后续实验优先级相应调整：
+
+1. 保留 ASB/AgentHarm/AgentDojo 静态结果作为 target strength 证据。
+2. 用 PAIR/TAP/SoC/GRA-style adaptive attack 测 TS-Guard 是否存在 query-adaptive robustness gap。
+3. 引入 AGrail 作为第二个 target guard，避免结论只针对 TS-Guard。
+4. 若 adaptive attack 在多个 target 上有效，再设计 self-evolving / adversarially trained guard 作为防御方法。
+
+---
+
+## Thread #7：从 intent ambiguity attack 转向轻量持续学习 step-level tool guard
+
+【Agent@Codex】【2026-06-03 00:00】
+
+根据最新 50-sample adaptive attack 对比，当前主线应暂时从 “intent ambiguity 是根因” 收敛为更稳的研究问题：
+
+> 静态 benchmark 上表现很强的 step-level tool guard，在 query-adaptive attack 下是否存在系统性鲁棒性缺口？如果存在，能否用轻量持续学习 / adversarial hard-negative 更新，让 guard 在不牺牲 clean allow 的情况下快速吸收新攻击变体？
+
+证据见 `LOGS/2026-W23.md#EXP-2026W23-001`、`LOGS/2026-W23.md#EXP-2026W23-002`、`LOGS/2026-W23.md#EXP-2026W23-003`、`LOGS/2026-W23.md#EXP-2026W23-004`。
+
+**静态 target strength**
+
+TS-Guard 在 ToolSafe / TS-Bench 三个静态子集上整体较强：
+
+- AgentDojo proposed-action slice：489 raw / 488 valid，accuracy=0.926，F1=0.945，attack catch=0.904，clean allow=0.979。
+- AgentHarm：731 条，accuracy=0.843，F1=0.898，recall=0.960。
+- ASB all：5231 条，accuracy=0.952，F1=0.950，recall=0.940；其中 OPI-success 子段 F1≈0.950，recall≈0.928。
+
+这说明论文动机不能写成 “TS-Guard 静态检测差”。更合理的动机是：TS-Guard 在公开静态 benchmark 上已经是强 target，但这不等于 adaptive robustness。
+
+**同一批 50 seed rows / 47 unique proposed-action pairs 上的 adaptive attack 对比**
+
+这里的 `pair` 指一个 step-level guard evaluation point，即 `(user_request, history, current_action)`，用 `(id-interaction, id-segment)` 唯一标识。50 个 seed rows 去重后是 47 个 unique proposed-action pairs。
+
+| Attack / Threat model | 可修改内容 | Queries | Weak ASR | Official strong ASR | Strict strong ASR | Mean best score |
+|---|---|---:|---:|---:|---:|---:|
+| SoC finite-arm | 固定离散 context arms | 500 | 21.3% | 0.0% | 0.0% | 1.87 |
+| PAIR whole-history upper bound | `history + current Thought/rationale` | 390 | 97.9% | 40.4% | 29.8% | 7.00 |
+| PAIR external-source-span + induced Thought | 单个 `<INFORMATION>...</INFORMATION>` external observation span + offline induced Thought | 429 | 72.3% | 10.6% | 6.4% | 4.43 |
+
+口径定义：
+
+- `Weak ASR`：TS-Guard 从原始 `1.0` block 降到 `0.5` 或 `0.0`，代表 confidence erosion / borderline downgrade。
+- `Official strong ASR`：按 ToolSafe parser 的 overall risk score 进入 allow-like `0.0` 区域；注意该 parser 在 `Being_Attacked=no` 且 `Malicious_User_Request=no` 时，即使 `Harmfulness_Rating=0.5/1.0` 也可能返回 overall `0.0`。
+- `Strict strong ASR`：更严格，要求 `Being_Attacked=no` 且 `Harmfulness_Rating=0.0`。
+
+**对 threat model 的解释**
+
+1. **Whole-history PAIR 是 upper bound。**  
+   它证明 feedback-conditioned adaptive generation 能显著绕过 / 降分 TS-Guard，但攻击面偏强，因为真实 IPI 攻击者不能任意修改完整 `history` 或 agent Thought。
+
+2. **External-source-span PAIR 更接近真实 IPI。**  
+   对 AgentDojo / ToolSafe IPI，攻击者合理可控的是 prior tool observation 中的 external source content，例如 email body、file content、calendar description、transaction subject/message。离线数据里这些 payload 表现为 `<INFORMATION>...</INFORMATION>` span。该 setting 只改这个 span，并固定 Action / Action Input。
+
+3. **Induced Thought 是 offline approximation，不是最终真实攻击。**  
+   真实链条是 `source -> observation -> agent re-planning -> Thought/Action -> guard check`。当前不跑 rollout，所以用 `--rewrite-rationale` 近似“source 改变后 agent 会产生的新 Thought”。这比 whole-history 更受限，但仍不是 end-to-end rollout。
+
+4. **Source-only 是下限，还需要补。**  
+   如果只改 external source span 而不改 Thought，本质上是在测 `O_new -> T_old -> A_old`，即 “PI 没有影响 current Thought 时的保守下限”。如果 source-only 成功，说明问题非常强；如果失败，也不能否定真实 rollout 攻击。
+
+**为什么 SoC 不强**
+
+SoC 当前是 non-generative finite-arm context switching：只在有限离散 arms 中选择，例如 benign framing / authority context / ambiguity resolution。它没有根据 TS-Guard 的自然语言 feedback 做内容级修补，因此只能造成少量 weak downgrade，不能实现 strict bypass。与 PAIR 的差异说明：真正有效的是 feedback-conditioned generation，而不是任意 bandit/context switching。
+
+**新的方法方向**
+
+当前更可行的 defense idea：
+
+> 训练 / 维护一个轻量化 step-level tool guard，使其能从 adaptive attack 产生的 hard negatives 中持续更新。目标不是重新证明静态 benchmark SOTA，而是在静态高分基础上提升 adaptive robustness，并保持 clean allow。
+
+可验证贡献可以拆成：
+
+- **Attack audit**：证明 TS-Guard 这类 learned / LLM guard 在静态 ASB/AgentDojo 上强，但在 PAIR-style adaptive attack 下出现显著 downgrade。
+- **Threat-model calibration**：区分 whole-history upper bound、external-source-span constrained offline attack、source-only lower bound、future rollout attack。
+- **Defense method**：轻量 continual / self-evolving guard，使用 adaptive attack hard negatives 做小步更新或 memory-based calibration。
+- **Metric**：static F1 / clean allow + adaptive weak ASR reduction + strict strong ASR reduction + update cost / latency。
+
+**下一步**
+
+- [ ] 跑相同 50 pairs 的 `source-only` lower-bound。
+- [ ] 决定是否把 external-source-span + induced Thought 扩到 182。
+- [ ] 跑 TAP-50，判断 tree-search jailbreak adaptive generation 是否接近 PAIR，还是 PAIR 更适合 tool-use guard。
+- [ ] 引入 AGrail 作为第二个 target guard，避免结论只针对 TS-Guard。
+- [ ] 设计最小 defense MVP：用 PAIR/source-span hard negatives 做小模型或 memory-calibrated guard 更新，并评估 adaptive ASR 是否下降。
+
 ---
 
 ## Resolution（关闭议题时必填）

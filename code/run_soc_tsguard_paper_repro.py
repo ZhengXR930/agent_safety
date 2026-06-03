@@ -99,6 +99,10 @@ ARMS: dict[str, Callable[[dict[str, Any], int], dict[str, str]]] = {
 }
 
 
+def seed_key(seed: dict[str, Any]) -> str:
+    return f"{seed['case_id']}::{seed.get('segment_id')}"
+
+
 def reward_from_guard(result: dict[str, Any], mode: str) -> float:
     if mode == "binary":
         return 1.0 if strong_success(result) else 0.0
@@ -198,7 +202,7 @@ def main() -> None:
             if line.strip():
                 rec = json.loads(line)
                 records.append(rec)
-                done.add(str(rec["case_id"]))
+                done.add(f"{rec['case_id']}::{rec.get('segment_id')}")
 
     target = TSGuardTarget(
         backend=args.target_backend,
@@ -212,7 +216,7 @@ def main() -> None:
     q_global = {a: 0.0 for a in ARMS}
     n_global = {a: 0 for a in ARMS}
     for idx, seed in enumerate(seeds, start=1):
-        if str(seed["case_id"]) in done:
+        if seed_key(seed) in done:
             continue
         case_records = run_case(
             seed=seed,

@@ -75,6 +75,10 @@ def prune(items: list[dict[str, Any]], score_key: str, width: int) -> list[dict[
     return kept if kept else shuffled[: min(width, len(shuffled))]
 
 
+def seed_key(seed: dict[str, Any]) -> str:
+    return f"{seed['case_id']}::{seed.get('segment_id')}"
+
+
 def run_case(
     *,
     seed: dict[str, Any],
@@ -204,7 +208,7 @@ def main() -> None:
             if line.strip():
                 rec = json.loads(line)
                 existing.append(rec)
-                done.add(str(rec["case_id"]))
+                done.add(f"{rec['case_id']}::{rec.get('segment_id')}")
 
     attacker = OpenAIAttacker(
         model=args.attacker_model,
@@ -224,7 +228,7 @@ def main() -> None:
 
     records = existing
     for idx, seed in enumerate(seeds, start=1):
-        if str(seed["case_id"]) in done:
+        if seed_key(seed) in done:
             continue
         case_records = run_case(
             seed=seed,
