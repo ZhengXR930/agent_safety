@@ -340,7 +340,7 @@ ASB `all` 共 5231 条已完整跑完，`meta_data/preds/labels` 长度均为 52
 
 > 静态 benchmark 上表现很强的 step-level tool guard，在 query-adaptive attack 下是否存在系统性鲁棒性缺口？如果存在，能否用轻量持续学习 / adversarial hard-negative 更新，让 guard 在不牺牲 clean allow 的情况下快速吸收新攻击变体？
 
-证据见 `LOGS/2026-W23.md#EXP-2026W23-001`、`LOGS/2026-W23.md#EXP-2026W23-002`、`LOGS/2026-W23.md#EXP-2026W23-003`、`LOGS/2026-W23.md#EXP-2026W23-004`。
+证据见 `LOGS/2026-W23.md#EXP-2026W23-001`、`LOGS/2026-W23.md#EXP-2026W23-002`、`LOGS/2026-W23.md#EXP-2026W23-003`、`LOGS/2026-W23.md#EXP-2026W23-004`、`LOGS/2026-W23.md#EXP-2026W23-005`。
 
 **静态 target strength**
 
@@ -360,6 +360,7 @@ TS-Guard 在 ToolSafe / TS-Bench 三个静态子集上整体较强：
 |---|---|---:|---:|---:|---:|---:|
 | SoC finite-arm | 固定离散 context arms | 500 | 21.3% | 0.0% | 0.0% | 1.87 |
 | PAIR whole-history upper bound | `history + current Thought/rationale` | 390 | 97.9% | 40.4% | 29.8% | 7.00 |
+| PAIR external-source-span only | 单个 `<INFORMATION>...</INFORMATION>` external observation span，保持原 Thought | 426 | 72.3% | 14.9% | 8.5% | 4.64 |
 | PAIR external-source-span + induced Thought | 单个 `<INFORMATION>...</INFORMATION>` external observation span + offline induced Thought | 429 | 72.3% | 10.6% | 6.4% | 4.43 |
 
 口径定义：
@@ -379,8 +380,8 @@ TS-Guard 在 ToolSafe / TS-Bench 三个静态子集上整体较强：
 3. **Induced Thought 是 offline approximation，不是最终真实攻击。**  
    真实链条是 `source -> observation -> agent re-planning -> Thought/Action -> guard check`。当前不跑 rollout，所以用 `--rewrite-rationale` 近似“source 改变后 agent 会产生的新 Thought”。这比 whole-history 更受限，但仍不是 end-to-end rollout。
 
-4. **Source-only 是下限，还需要补。**  
-   如果只改 external source span 而不改 Thought，本质上是在测 `O_new -> T_old -> A_old`，即 “PI 没有影响 current Thought 时的保守下限”。如果 source-only 成功，说明问题非常强；如果失败，也不能否定真实 rollout 攻击。
+4. **Source-only 是下限，但已经有非平凡效果。**  
+   如果只改 external source span 而不改 Thought，本质上是在测 `O_new -> T_old -> A_old`，即 “PI 没有影响 current Thought 时的保守下限”。最新结果显示 source-only weak ASR=72.3%，strict strong ASR=8.5%，甚至略高于 induced Thought。这说明攻击文本本身已经能显著影响 TS-Guard 对 history 的判断；同时也提示 attacker-written induced Thought 可能过于“解释攻击”，反而暴露 semantic laundering 目标。
 
 **为什么 SoC 不强**
 
@@ -401,11 +402,144 @@ SoC 当前是 non-generative finite-arm context switching：只在有限离散 a
 
 **下一步**
 
-- [ ] 跑相同 50 pairs 的 `source-only` lower-bound。
+- [x] 跑相同 50 pairs 的 `source-only` lower-bound。
 - [ ] 决定是否把 external-source-span + induced Thought 扩到 182。
 - [ ] 跑 TAP-50，判断 tree-search jailbreak adaptive generation 是否接近 PAIR，还是 PAIR 更适合 tool-use guard。
 - [ ] 引入 AGrail 作为第二个 target guard，避免结论只针对 TS-Guard。
 - [ ] 设计最小 defense MVP：用 PAIR/source-span hard negatives 做小模型或 memory-calibrated guard 更新，并评估 adaptive ASR 是否下降。
+
+---
+
+## Thread #8：Factorized Continual Tool-Use Guard MVP
+
+【Agent@Codex】【2026-06-04 16:19】
+
+根据最新讨论，当前 defense 方案进一步明确为 **Factorized Continual Tool-Use Guard**，并已同步重写 `idea.md`。
+
+**当前方法定义**
+
+训练一个单模型、单前向的 7B step-level guard，输入 `original user intent + tool schema + trajectory history + current proposed action`，输出 compact JSON：
+
+```json
+{
+  "F1_source_trust": "...",
+  "F2_instruction_data_boundary": "...",
+  "F3_authorization_scope": "...",
+  "F4_action_consequence": "...",
+  "F5_trajectory_consistency": "...",
+  "decision": "ALLOW|WARN|BLOCK"
+}
+```
+
+五个因子含义：
+
+- `F1 source_trust`：当前动作是否由可信来源驱动，还是源自 untrusted tool return / tool metadata / injected authority。
+- `F2 instruction_data_boundary`：是否把外部数据错误提升为指令或权限。
+- `F3 authorization_scope`：动作是否同时满足用户合法任务授权与安全策略上限；包含 `F3a user_authorization_scope` 和 `F3b policy_ceiling`。
+- `F4 action_consequence`：动作是否造成危险后果，例如金钱转移、隐私泄露、破坏性修改、危险建议等。
+- `F5 trajectory_consistency`：从原始用户意图锚定整条轨迹，判断当前动作是否由原始意图和显式授权步骤支持，还是出现 multi-step authorization laundering / cumulative scope expansion。
+
+最终 `ALLOW / WARN / BLOCK` 不做硬编码因子投票，但也不是纯端到端 shortcut。Final decision 是 **factor-conditioned**：必须显式受 `F1-F5` 表示约束，并通过 counterfactual / consistency loss 保持 decision-factor 一致性。否则因子会退化成 post-hoc JSON 解释。
+
+**攻击面到因子的映射**
+
+| Surface | Failure | Main factors |
+|---|---|---|
+| `S1 tool return` | untrusted observation drives action | `F1/F2/F3/F5` |
+| `S2 tool description` | tool schema / metadata injects authority or abnormal parameters | `F1/F2/F3` |
+| `S3a malicious user` | user explicitly requests harmful action; user desire is bounded by policy | `F3b/F4` |
+| `S3b authority impersonation` | injected text forges user/system/tool authority | `F1/F2/F3/F5` |
+
+**训练信号**
+
+MVP 保留完整方法机制，只收窄第一轮数据范围。训练数据由三部分组成：
+
+1. **静态 benchmark traces**：ToolSafe / TS-Bench 的 AgentDojo、AgentHarm、ASB，用来覆盖 S1 tool-return IPI、S3 user harmfulness / authority impersonation，以及 clean utility。
+2. **反事实对**：单因子对、轨迹级对、组合对。反事实样本必须通过两个过滤：最小表面差异，以及独立 adjudicator 确认标签翻转原因确实是目标因子或目标累积属性。
+3. **Adaptive hard negatives**：PAIR / TAP / Agent-as-Attack / GRA-style 产生的 bypass 或 borderline samples，用于 LoRA hard-negative update。
+
+反事实样本必须带 causal schema，而不是普通数据增强：
+
+```json
+{
+  "counterfactual_group_id": "...",
+  "changed_factor": "F1|F2|F3|F4|F5",
+  "target_factor_before": "...",
+  "target_factor_after": "...",
+  "stable_factors": ["F1", "F2", "F4"],
+  "decision_before": "ALLOW|WARN|BLOCK",
+  "decision_after": "ALLOW|WARN|BLOCK"
+}
+```
+
+训练约束是：目标因子按因果变化翻转，非目标因子保持稳定，final decision 跟随目标因子的因果变化。
+
+**结构化 adaptive attacker 与定向更新闭环**
+
+PAIR / TAP / Agent-as-Attack / GRA-policy 只是生成器。真正的方法设计是 factor-targeted attacker：
+
+- `Attack-F1`：provenance forgery / source laundering。
+- `Attack-F2`：instruction-data boundary confusion。
+- `Attack-F3`：authorization expansion 或 policy-ceiling evasion。
+- `Attack-F4`：consequence hiding / risk minimization。
+- `Attack-F5`：multi-step authorization laundering / cumulative scope expansion。
+
+每个 successful bypass 不直接丢进训练集，而是走闭环：
+
+```text
+adaptive bypass
+  -> attribute failed factor(s)
+  -> synthesize hard counterfactual pairs around those factor(s)
+  -> targeted LoRA update with replay
+  -> held-out adaptive attack validation
+```
+
+如果 bypass 无法归因到现有因子且 adjudicator 确认是真实安全失败，才考虑扩展 factor schema；如果所有因子 clean 但仍 unsafe，则标记为不可约边界或 policy definition 缺口。
+
+**具体训练 recipe**
+
+轻量化不是指训练时没有适配，而是指部署时仍然是单模型单前向。训练时使用 LoRA / QLoRA；每轮验证通过后将 LoRA merge 进运行模型，不在推理时保留 router、多 adapter 或多次 LLM 调用。
+
+训练分五步：
+
+1. **Binary warmup**：从 TS-Guard 或兼容 7B checkpoint 初始化，只训 `ALLOW/WARN/BLOCK`，保持静态 ToolSafe 性能。
+2. **Factorized SFT**：继续训练结构化 JSON 输出，加入 `F1-F5` factor loss。
+3. **Counterfactual training**：加入单因子、轨迹级、组合反事实对；目标因子应翻转，非目标因子应稳定，final decision 跟随因果变化。
+4. **Adaptive hard-negative update**：用 PAIR / TAP / Agent-as-Attack 挖 bypass 和 borderline，adjudicate 后加入 hard-negative buffer，再用 LoRA 小步更新。
+5. **Continual rounds**：每轮带 clean/static unsafe/old hard negatives/counterfactual replay，防遗忘；held-out attack 和 clean utility 过关后才 merge。
+
+损失形式：
+
+```text
+L = L_final + sum_i lambda_i * L_factor_i
+    + alpha * L_pair + beta * L_replay
+    + delta * L_consistency + gamma * L_LAT
+```
+
+其中 `L_consistency` 约束 final decision 与 factor state 兼容，并约束 counterfactual group 中非目标因子稳定。`L_LAT` 是可选的 local adversarial training 正则，只用于让 factor prediction 在 hidden / embedding 小扰动下不脆弱翻转。LAT 不承担主要鲁棒性 claim；真正的 adaptive robustness 来自 counterfactual pairs、factor-targeted hard negatives 和 held-out adaptive attack 评估。
+
+**MVP 评估**
+
+第一版不做 toy 降级，但必须包含最小因果消融来验证 factor supervision、counterfactual pairs、adaptive hard negatives 各自是否超越 binary SFT：
+
+- Baseline：TS-Guard、binary SFT guard、factorized guard without counterfactual、factorized guard with counterfactual、factorized guard with counterfactual + adaptive hard negatives。
+- Attack：优先使用已证明有效的 PAIR source-span 和 PAIR source-span + proxy Thought；Agent-as-Attack 作为 non-adaptive agentic baseline；TAP / full GRA-policy 作为后续 held-out attacker。
+- Metrics：clean allow、static macro-F1、PAIR weak ASR、PAIR official strong ASR、PAIR strict strong ASR、latency / step cost、factor agreement、factor leakage、counterfactual factor consistency、bypass attribution accuracy。
+
+Go 条件：
+
+- clean allow 下降不超过 3-5%；
+- PAIR strict ASR 相比 TS-Guard 至少下降 30%；
+- 完整 factorized 方法显著优于 binary SFT；
+- held-out attack variants 上仍保持 ASR 降低。
+
+No-Go 条件：
+
+- binary SFT 达到相同鲁棒性；
+- counterfactual pairs 对 held-out adaptive robustness 没有提升；
+- factor outputs 不稳定或只是装饰；
+- clean utility 明显崩溃。
+
 
 ---
 
