@@ -149,6 +149,16 @@ def seed_key(seed: dict[str, Any]) -> str:
     return f"{seed['case_id']}::{seed.get('segment_id')}"
 
 
+def split_group_key(seed: dict[str, Any]) -> str:
+    return f"agentdojo:{seed['case_id']}"
+
+
+def load_split_map(path: str | None) -> dict[str, str]:
+    if not path:
+        return {}
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
 def unpack_attack_prompt(raw_prompt: Any) -> dict[str, Any]:
     if isinstance(raw_prompt, dict):
         return raw_prompt
@@ -294,6 +304,13 @@ def main() -> None:
     parser.add_argument("--target-model", default="MurrayTom/TS-Guard")
     parser.add_argument("--target-template", default="TS-Guard")
     parser.add_argument("--max-model-len", type=int, default=16384)
+    parser.add_argument("--split-file", default=None)
+    parser.add_argument("--split", choices=["train", "dev", "test"], default=None)
+    parser.add_argument(
+        "--cuda-visible-devices",
+        default=None,
+        help="Restrict the local TS-Guard target to specific CUDA device ids, e.g. '0'.",
+    )
     parser.add_argument("--rewrite-rationale", action="store_true")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -314,6 +331,13 @@ def main() -> None:
     (out_dir / "config.json").write_text(json.dumps(vars(args), indent=2), encoding="utf-8")
 
     seeds = [s for s in load_blocked_toolsafe_attacks() if extract_external_observation_span(s)]
+    split_map = load_split_map(args.split_file)
+    if args.split:
+        if not split_map:
+            raise ValueError("--split requires --split-file")
+        before = len(seeds)
+        seeds = [s for s in seeds if split_map.get(split_group_key(s)) == args.split]
+        print(f"filtered split={args.split}: {len(seeds)}/{before} seeds", flush=True)
     if args.limit_cases is not None:
         seeds = seeds[: args.limit_cases]
     existing: list[dict[str, Any]] = []
@@ -346,6 +370,7 @@ def main() -> None:
         api_key_env=args.api_key_env,
         base_url=args.base_url,
         max_model_len=args.max_model_len,
+        cuda_visible_devices=args.cuda_visible_devices,
     )
 
     records = existing

@@ -229,7 +229,10 @@ class TSGuardTarget:
         api_key_env: str = "OPENAI_API_KEY",
         base_url: str | None = None,
         max_model_len: int = 16384,
+        cuda_visible_devices: str | None = None,
     ) -> None:
+        if cuda_visible_devices is not None:
+            os.environ["CUDA_VISIBLE_DEVICES"] = cuda_visible_devices
         self.backend = backend
         self.model = model
         self.template_name = template_name

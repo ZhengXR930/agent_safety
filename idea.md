@@ -59,7 +59,7 @@ train a guard to predict five safety semantic factors and a final decision:
 | `F2 instruction_data_boundary` | Did the agent treat external data as instructions or authority? |
 | `F3 authorization_scope` | Is the action within both the user's legitimate task authorization and the safety policy ceiling? |
 | `F4 action_consequence` | What harmful consequence can the proposed action cause? |
-| `F5 trajectory_consistency` | Is the current action justified by the original user intent and prior explicitly authorized steps, or has the trajectory laundered external instructions / expanded permissions / accumulated small steps into an unauthorized outcome? |
+| `F5 current_action_causality` | Is the current action causally driven by untrusted content, laundering, or cumulative authorization expansion, rather than merely occurring after a historically compromised context? |
 
 `F3` has two sub-judgments:
 
@@ -76,7 +76,8 @@ The model outputs compact structured JSON:
   "F2_instruction_data_boundary": "...",
   "F3_authorization_scope": "...",
   "F4_action_consequence": "...",
-  "F5_trajectory_consistency": "...",
+  "F5_current_action_causality": "...",
+  "audit_flags": ["historical_compromise"],
   "decision": "ALLOW|WARN|BLOCK"
 }
 ```
@@ -87,6 +88,15 @@ or be jointly constrained by the `F1-F5` representations. We enforce
 decision-factor consistency through counterfactual and consistency losses so
 the model cannot solve the final label by shortcuts while using factors as
 decorative explanations.
+
+The final decision is also **current-action causal**. Historical compromise,
+prompt-injection attempts, or suspicious context should be recorded in
+`audit_flags`, but they should not by themselves cause `BLOCK`. A `BLOCK`
+decision requires that the violated factor is causally connected to the current
+proposed action and that the current action has material risk or real side
+effect. This distinction is necessary to preserve clean allow on trajectories
+where an earlier step was suspicious but the current action has returned to the
+user-authorized task.
 
 ## Relationship to Authentication DAG
 
@@ -99,9 +109,11 @@ authorization substructure behind `F1-F3`:
 - action class, target, amount, recipient, time, payload, and side effects must
   stay inside the user's grant.
 
-The broader guard adds `F4` harmful consequence reasoning and `F5` trajectory
-anchoring, which are required for malicious-user requests and multi-step
-laundering cases where a pure authorization DAG is insufficient.
+The broader guard adds `F4` harmful consequence reasoning and
+`F5_current_action_causality`, which are required for malicious-user requests
+and multi-step laundering cases where a pure authorization DAG is insufficient.
+Historical compromise is represented as an audit flag; it is not itself a
+decision-bearing factor unless it causally drives the current proposed action.
 
 ## Training Signal
 
@@ -207,8 +219,11 @@ cross-entropy on each semantic factor. `L_pair` is a counterfactual pair loss:
 for paired samples that differ only in one target factor, the model should flip
 the target factor and final decision while keeping unrelated factors stable.
 `L_replay` preserves clean utility and previously learned attack patterns.
-`L_consistency` enforces that the final decision is compatible with the factor
-state and that non-target factors remain stable within counterfactual groups.
+`L_consistency` enforces that the final decision is compatible with the
+current-action causal factor state and that non-target factors remain stable
+within counterfactual groups. It also separates audit-only factors such as
+historical compromise from decision-bearing factors such as current-action
+causal laundering.
 `L_LAT` is optional local adversarial training on hidden states / embeddings,
 used only to stabilize factor predictions under small local perturbations.
 
@@ -374,8 +389,14 @@ clean utility.
 
 ## Changelog
 
+- `2026-06-07`: Updated F5 from broad trajectory consistency to
+  current-action causality after the training-free causal verifier pilot.
+  Historical compromise now belongs in `audit_flags`; final decision should
+  block only when a factor violation causally drives the current proposed
+  action. Pilot evidence: clean true-negative allow=96/100 and PAIR re-block
+  25/25 on `EXP-2026W23-013`.
 - `2026-06-04`: Replaced the earlier Authentication-DAG-only framing with a
   factorized continual step-level tool guard. Authentication DAG is retained as
   the F1-F3 authorization substructure; the active method now adds F4
-  consequence reasoning, F5 trajectory consistency, counterfactual training, and
-  adaptive hard-negative updates.
+  consequence reasoning, F5-style trajectory/causal reasoning, counterfactual
+  training, and adaptive hard-negative updates.

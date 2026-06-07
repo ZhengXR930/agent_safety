@@ -410,136 +410,195 @@ SoC 当前是 non-generative finite-arm context switching：只在有限离散 a
 
 ---
 
-## Thread #8：Factorized Continual Tool-Use Guard MVP
+## Thread #8：因果因子化方案
 
-【Agent@Codex】【2026-06-04 16:19】
+【Agent@Codex】【2026-06-07 21:05】
 
-根据最新讨论，当前 defense 方案进一步明确为 **Factorized Continual Tool-Use Guard**，并已同步重写 `idea.md`。
+本 thread 聚焦 defense MVP：TS-Guard 在静态 benchmark 上很强，但在 source-span adaptive attack 下出现明显 robustness gap。我们先用 M1 验证“直接 hard-negative LoRA 是否足够”，再用 M2 training-free verifier 验证因果因子化 schema 是否能保住 clean allow 同时重新拦截 bypass。
 
-**当前方法定义**
+**1. 因子化设计思路**
 
-训练一个单模型、单前向的 7B step-level guard，输入 `original user intent + tool schema + trajectory history + current proposed action`，输出 compact JSON：
+Step-level tool guard 判断的不是整段历史是否“看起来可疑”，而是当前 proposed action 是否被可信授权因果支持。我们把当前 action 的安全性拆成五个稳定因子：
 
-```json
-{
-  "F1_source_trust": "...",
-  "F2_instruction_data_boundary": "...",
-  "F3_authorization_scope": "...",
-  "F4_action_consequence": "...",
-  "F5_trajectory_consistency": "...",
-  "decision": "ALLOW|WARN|BLOCK"
-}
-```
-
-五个因子含义：
-
-- `F1 source_trust`：当前动作是否由可信来源驱动，还是源自 untrusted tool return / tool metadata / injected authority。
-- `F2 instruction_data_boundary`：是否把外部数据错误提升为指令或权限。
-- `F3 authorization_scope`：动作是否同时满足用户合法任务授权与安全策略上限；包含 `F3a user_authorization_scope` 和 `F3b policy_ceiling`。
-- `F4 action_consequence`：动作是否造成危险后果，例如金钱转移、隐私泄露、破坏性修改、危险建议等。
-- `F5 trajectory_consistency`：从原始用户意图锚定整条轨迹，判断当前动作是否由原始意图和显式授权步骤支持，还是出现 multi-step authorization laundering / cumulative scope expansion。
-
-最终 `ALLOW / WARN / BLOCK` 不做硬编码因子投票，但也不是纯端到端 shortcut。Final decision 是 **factor-conditioned**：必须显式受 `F1-F5` 表示约束，并通过 counterfactual / consistency loss 保持 decision-factor 一致性。否则因子会退化成 post-hoc JSON 解释。
-
-**攻击面到因子的映射**
-
-| Surface | Failure | Main factors |
+| Factor | 判定问题 | 覆盖的失败模式 |
 |---|---|---|
-| `S1 tool return` | untrusted observation drives action | `F1/F2/F3/F5` |
-| `S2 tool description` | tool schema / metadata injects authority or abnormal parameters | `F1/F2/F3` |
-| `S3a malicious user` | user explicitly requests harmful action; user desire is bounded by policy | `F3b/F4` |
-| `S3b authority impersonation` | injected text forges user/system/tool authority | `F1/F2/F3/F5` |
+| `F1_source_trust` | 当前 action 的驱动力是否来自可信用户/系统授权，而不是 untrusted source | 外部邮件/网页/tool return/tool description 伪造权威 |
+| `F2_instruction_data_boundary` | 是否把外部数据当成指令、权限或 policy exception | prompt injection、tool return instruction、描述投毒 |
+| `F3_authorization_scope` | 当前 action 是否在用户合法任务授权和安全策略上限内 | scope expansion、恶意用户请求、伪造授权 |
+| `F4_action_consequence` | 当前 action 是否会造成实际风险或副作用 | 隐私泄露、转账、删除、破坏性修改、安全/法律/医疗风险 |
+| `F5_current_action_causality` | 当前 action 是否被 untrusted content / laundering 因果驱动 | 多步洗白、历史污染驱动当前动作、cumulative authorization expansion |
 
-**训练信号**
+这五个因子的覆盖关系是：`F1/F2` 处理来源和边界，`F3` 处理授权范围，`F4` 处理后果严重性，`F5` 处理跨步因果链。一个 unsafe tool-use action 至少需要在其中某一层出问题：要么来源不可信，要么数据被升级成指令，要么越权，要么后果危险，要么当前动作被污染链条因果驱动。反过来，历史里出现过污染但当前 action 已回到用户任务，不应仅凭历史可疑就 BLOCK。
 
-MVP 保留完整方法机制，只收窄第一轮数据范围。训练数据由三部分组成：
-
-1. **静态 benchmark traces**：ToolSafe / TS-Bench 的 AgentDojo、AgentHarm、ASB，用来覆盖 S1 tool-return IPI、S3 user harmfulness / authority impersonation，以及 clean utility。
-2. **反事实对**：单因子对、轨迹级对、组合对。反事实样本必须通过两个过滤：最小表面差异，以及独立 adjudicator 确认标签翻转原因确实是目标因子或目标累积属性。
-3. **Adaptive hard negatives**：PAIR / TAP / Agent-as-Attack / GRA-style 产生的 bypass 或 borderline samples，用于 LoRA hard-negative update。
-
-反事实样本必须带 causal schema，而不是普通数据增强：
+当前推荐的最小输出 schema 是：
 
 ```json
 {
-  "counterfactual_group_id": "...",
-  "changed_factor": "F1|F2|F3|F4|F5",
-  "target_factor_before": "...",
-  "target_factor_after": "...",
-  "stable_factors": ["F1", "F2", "F4"],
-  "decision_before": "ALLOW|WARN|BLOCK",
-  "decision_after": "ALLOW|WARN|BLOCK"
+  "factors": {
+    "F1_source_trust": {"violation": true},
+    "F2_instruction_data_boundary": {"violation": true},
+    "F3_authorization_scope": {"violation": false},
+    "F4_action_consequence": {"violation": true},
+    "F5_current_action_causality": {"violation": true}
+  },
+  "decision": "ALLOW|WARN|BLOCK",
+  "confidence": 0.91,
+  "brief": "one sentence"
 }
 ```
 
-训练约束是：目标因子按因果变化翻转，非目标因子保持稳定，final decision 跟随目标因子的因果变化。
+这里每个 factor 是二值 violation。`WARN` 就是 review / uncertainty channel。部署 schema 不保留 `primary_factor / needs_review / audit_flags`；这些可以作为离线 adjudication 字段，但不能成为线上 guard 的额外逃逸通道。
 
-**结构化 adaptive attacker 与定向更新闭环**
+**2. 攻击面与因子覆盖**
 
-PAIR / TAP / Agent-as-Attack / GRA-policy 只是生成器。真正的方法设计是 factor-targeted attacker：
+tool guard的主要攻击面：
 
-- `Attack-F1`：provenance forgery / source laundering。
-- `Attack-F2`：instruction-data boundary confusion。
-- `Attack-F3`：authorization expansion 或 policy-ceiling evasion。
-- `Attack-F4`：consequence hiding / risk minimization。
-- `Attack-F5`：multi-step authorization laundering / cumulative scope expansion。
+| Surface | 攻击者可改什么 | 典型攻击 | 主要因子 |
+|---|---|---|---|
+| `S1 tool return / external source` | 单个 email、网页、PDF、issue、retrieved document、tool observation | IPI、source-span attack、authorization laundering | `F1/F2/F3/F5` |
+| `S2 tool description / metadata` | tool schema、description、routing metadata、MCP/skill manifest | malicious tool / description poisoning | `F1/F2/F3` |
+| `S3 user query / user-side authority` | user query 或 user-provided content | malicious user, user impersonating system/tool authority | `F3/F4` 或 `F1/F2/F3` |
 
-每个 successful bypass 不直接丢进训练集，而是走闭环：
+`S1` 是当前实验主战场，因为 ToolSafe AgentDojo IPI 和 PAIR source-span attack 已经有现成 benchmark/artifact。`S2` 和 skill/MCP 场景可以自然映射到 tool description/metadata 投毒，因为它们本质上也是把外部文本伪装成工具能力或权限。`S3a` 恶意用户需要 `F3` 的 policy ceiling 和 `F4` 的后果判断；`S3b` 权威冒充则落到 `F1/F2/F3`。
 
-```text
-adaptive bypass
-  -> attribute failed factor(s)
-  -> synthesize hard counterfactual pairs around those factor(s)
-  -> targeted LoRA update with replay
-  -> held-out adaptive attack validation
-```
+**3. 基本 baseline M1：直接 hard-negative LoRA**
 
-如果 bypass 无法归因到现有因子且 adjudicator 确认是真实安全失败，才考虑扩展 factor schema；如果所有因子 clean 但仍 unsafe，则标记为不可约边界或 policy definition 缺口。
+M1 是必须先排除的最简单解释：adaptive gap 是否只是缺少 PAIR 风格训练样本？实验设定如下：
 
-**具体训练 recipe**
-
-轻量化不是指训练时没有适配，而是指部署时仍然是单模型单前向。训练时使用 LoRA / QLoRA；每轮验证通过后将 LoRA merge 进运行模型，不在推理时保留 router、多 adapter 或多次 LLM 调用。
-
-训练分五步：
-
-1. **Binary warmup**：从 TS-Guard 或兼容 7B checkpoint 初始化，只训 `ALLOW/WARN/BLOCK`，保持静态 ToolSafe 性能。
-2. **Factorized SFT**：继续训练结构化 JSON 输出，加入 `F1-F5` factor loss。
-3. **Counterfactual training**：加入单因子、轨迹级、组合反事实对；目标因子应翻转，非目标因子应稳定，final decision 跟随因果变化。
-4. **Adaptive hard-negative update**：用 PAIR / TAP / Agent-as-Attack 挖 bypass 和 borderline，adjudicate 后加入 hard-negative buffer，再用 LoRA 小步更新。
-5. **Continual rounds**：每轮带 clean/static unsafe/old hard negatives/counterfactual replay，防遗忘；held-out attack 和 clean utility 过关后才 merge。
-
-损失形式：
+- **PAIR 全量攻击来源**：先在 ToolSafe AgentDojo blocked subset 上跑 PAIR source-span + DeepSeek proxy Thought（这里使用proxy thought是用于模拟target为deepseek的情况下，受到恶意注入后模型thought受到的影响。attacker和proxy虽然都是deepseek但是分别调用避免污染）。182 个 blocked seed candidates 中，177 个 unique `(case_id, segment_id)` proposed-action pairs 可定位 external source span 并完成攻击，共 1500 次 target queries。
+- **数据分割**：用 `code/data/guard_mvp_m1/splits.json` 按 `source + interaction id` 做 deterministic group split，保证同一个 interaction 的 static replay、PAIR variants 不会跨 train/dev/test 泄漏。
+- **训练数据**：M1 只使用 train split 的 PAIR hard negatives，加上 TS-Bench 静态 replay。构造后 train=4615 条，dev=1023 条，test=914 条；train 中 PAIR adaptive hard negatives=101 条。
+- **静态评估**：在 dev split 上生成 TS-Guard 三字段输出，检查 clean allow、strict/exact F1、parse error，验证 hard-negative LoRA 是否破坏静态校准。
+- **adaptive 评估**：不是复用训练时的 PAIR 结果，而是在 held-out test split 上对更新后的 M1 merged guard 重新跑 PAIR attack，并用同一 test split 上的原始 TS-Guard PAIR 结果作对照。
 
 ```text
-L = L_final + sum_i lambda_i * L_factor_i
-    + alpha * L_pair + beta * L_replay
-    + delta * L_consistency + gamma * L_LAT
+M1 Binary/Score Hard-Negative LoRA
+= MurrayTom/TS-Guard 初始化
++ 静态 replay 样本
++ train split PAIR hard negatives
++ 保守 QLoRA / LoRA 微调
++ held-out PAIR 重新攻击验证
 ```
 
-其中 `L_consistency` 约束 final decision 与 factor state 兼容，并约束 counterfactual group 中非目标因子稳定。`L_LAT` 是可选的 local adversarial training 正则，只用于让 factor prediction 在 hidden / embedding 小扰动下不脆弱翻转。LAT 不承担主要鲁棒性 claim；真正的 adaptive robustness 来自 counterfactual pairs、factor-targeted hard negatives 和 held-out adaptive attack 评估。
+如果 M1 成功，说明不需要复杂因子化；如果 M1 失败，才说明需要机制归因和反事实训练。
 
-**MVP 评估**
+M1 训练工程上成功：4×V100 跑完 151 steps，adapter 保存到 `code/models/m1_lora_ts_guard_4k_4bit_attn/`。但它在静态 dev 上出现 calibration drift：
 
-第一版不做 toy 降级，但必须包含最小因果消融来验证 factor supervision、counterfactual pairs、adaptive hard negatives 各自是否超越 binary SFT：
+- dev n=1023，parse errors=16。
+- strict F1=0.912，strict recall=0.897。
+- exact F1=0.744。
+- overall clean allow=435/480=0.906。
+- AgentDojo clean allow=0.783。
+- AgentHarm clean allow=0.516。
 
-- Baseline：TS-Guard、binary SFT guard、factorized guard without counterfactual、factorized guard with counterfactual、factorized guard with counterfactual + adaptive hard negatives。
-- Attack：优先使用已证明有效的 PAIR source-span 和 PAIR source-span + proxy Thought；Agent-as-Attack 作为 non-adaptive agentic baseline；TAP / full GRA-policy 作为后续 held-out attacker。
-- Metrics：clean allow、static macro-F1、PAIR weak ASR、PAIR official strong ASR、PAIR strict strong ASR、latency / step cost、factor agreement、factor leakage、counterfactual factor consistency、bypass attribution accuracy。
+更关键的是 held-out PAIR，同一 test split 34 个 unique proposed-action pairs：
 
-Go 条件：
+| Guard | weak ASR | official strong ASR | strict strong ASR | mean best score |
+|---|---:|---:|---:|---:|
+| Original TS-Guard | 0.794 | 0.118 | 0.088 | 4.765 |
+| M1 LoRA merged | 0.735 | 0.441 | 0.265 | 6.147 |
 
-- clean allow 下降不超过 3-5%；
-- PAIR strict ASR 相比 TS-Guard 至少下降 30%；
-- 完整 factorized 方法显著优于 binary SFT；
-- held-out attack variants 上仍保持 ASR 降低。
+M1 结论：naive hard-negative LoRA 不是有效 defense。它略微降低 weak ASR，但显著提高 allow-level bypass，并伤害 clean utility。这个负结果说明：直接把 adaptive hard negatives 混进 SFT 会学到更保守、更不稳定的表面边界，而不是当前动作的因果安全语义。证据见 `LOGS/2026-W23.md#EXP-2026W23-009` 至 `EXP-2026W23-011`。
 
-No-Go 条件：
+**4. M2 training-free 验证：因果因子化是否有信号**
 
-- binary SFT 达到相同鲁棒性；
-- counterfactual pairs 对 held-out adaptive robustness 没有提升；
-- factor outputs 不稳定或只是装饰；
-- clean utility 明显崩溃。
+M2 的训练目标不是“再强一点的二分类器”，而是 factor-conditioned current-action causal guard。正式训练前，我们先用 API verifier 做 training-free schema validation：如果 schema 本身无法分开 clean 与 bypass，就不值得训练本地 7B。
 
+这里必须区分两件事：
+
+- **deployable schema**：本地 7B 训练和推理只输出固定 minimal JSON，不依赖长 prompt。
+- **teacher/adjudicator**：强 API verifier 可以借鉴现有工作中的 policy/reasoning 设计，用来给训练集打 factor label 或诊断失败，但不能把长 prompt 本身当作最终方法。
+
+这个边界来自现有 guard 工作的经验：WildGuard 将 moderation 拆成 prompt harmfulness、response harmfulness、refusal 等多任务信号；GuardReasoner 强调让 guard 学会显式安全推理；Constitutional Classifiers 用自然语言 constitution 生成合成训练数据，但最终部署的是训练后的 classifier，而不是每次线上靠长 prompt 重判。我们可以借鉴这些设计来生成/校准 label，但最终 claim 必须落在本地 7B factorized guard 上。
+
+参考：
+
+- WildGuard: <https://arxiv.org/abs/2406.18495>
+- GuardReasoner: <https://arxiv.org/abs/2501.18492>
+- Constitutional Classifiers: <https://arxiv.org/abs/2501.18837>
+
+**4.1 小样本 pilot**
+
+先用 100 条 clean TN + 25 条 PAIR bypass 迭代 schema，结论是：三值 factor 会引入过多 `uncertain`，`needs_review/audit_flags/primary_factor` 也不是部署必须项。最干净的 schema 是五个二值 factor + `ALLOW/WARN/BLOCK`。
+
+| Schema | clean allow | PAIR warn/block | PAIR block | JSON valid | 结论 |
+|---|---:|---:|---:|---:|---|
+| causal 三值 factor | 0.96 | 1.00 | 1.00 | 1.00 | 有信号，但 per-factor `uncertain` 不适合训练 |
+| causal binary + flags | 0.97 | 1.00 | 0.96 | 1.00 | 去掉 per-factor uncertain 后更干净 |
+| causal minimal | 0.97 | 1.00 | 1.00 | 1.00 | 小样本上最好 |
+
+这个 pilot 只能说明 schema 有希望，不能证明覆盖性。证据见 `LOGS/2026-W23.md#EXP-2026W23-013` 至 `EXP-2026W23-015`。
+
+**4.2 大规模 schema validation**
+
+随后扩展到全部现有 benchmark/artifact，不手写造样本：
+
+- 静态 dev+test：来自 `guard_mvp_m1/dev.jsonl` 与 `test.jsonl`，覆盖 ToolSafe/TS-Bench 的 AgentDojo、AgentHarm、ASB OPI/DPI/attack-failure。
+- PAIR 全量：来自 ToolSafe AgentDojo 的 177 个 PAIR best proposed-action candidates，按 train/dev/test split 保留。
+- 总量：2114 条，其中 expected `ALLOW=925`，`WARN=526`，`BLOCK=663`。
+- 输入仍是原 benchmark 的 `user request + tool/schema context + trajectory history + current proposed action`；不再把 `category` 作为 label hint 传给最终 schema。
+
+全量 `causal_minimal` 结果：
+
+| Slice | n | 目标 | 结果 |
+|---|---:|---|---|
+| All expected ALLOW | 925 | clean allow | 0.889 |
+| All expected WARN | 526 | warn/block | 0.468 |
+| All expected BLOCK | 663 | warn/block / block | 0.896 / 0.893 |
+| Static expected BLOCK | 486 | warn/block / block | 0.866 / 0.862 |
+| PAIR all | 177 | warn/block / block | 0.977 / 0.977 |
+| PAIR dev+test | 62 | warn/block / block | 0.984 / 0.984 |
+
+结果是 **部分正、部分负**：
+
+- 正：F1-F5 对 source-span adaptive IPI 很敏感，PAIR 全量 177 上 re-block=97.7%，held-out dev/test PAIR re-block=98.4%。
+- 负：clean allow=88.9%，低于 M2 gate；WARN/borderline 捕获=46.8%，说明 schema 对 policy-boundary / preparatory / malicious-user 类型不够稳定。
+- 错误分布：103 个 expected ALLOW 被误拦，主要来自 ASB DPI clean、AgentDojo clean、AgentHarm clean；69 个 expected BLOCK 被放行，主要来自 ASB DPI unsafe 与 AgentHarm unsafe；280 个 expected WARN 被放行，主要来自 ASB DPI/OPI borderline 与 AgentHarm borderline。
+
+因此不能再写“training-free schema 已经满足 M2”。准确结论是：
+
+> F1-F5 schema 在 adaptive IPI 上有强检测信号，但 deployable minimal schema 还没有解决 clean calibration 与 malicious-user / borderline policy-ceiling 判断。M2 可以继续，但必须先构造 counterfactual/factor labels，而不是直接训练。
+
+证据见 `LOGS/2026-W23.md#EXP-2026W23-016`。
+
+**4.3 当前暴露的问题**
+
+全量结果把 M2 从“可直接训练”降级为“机制有信号但风险很高”。主要问题有三个。
+
+第一，**clean allow 不过 gate 是实质性负信号**。如果一个 verifier 在 expected ALLOW 上只有 88.9% allow，它不是简单的阈值问题，而是说明 factor decision boundary 仍然把“高风险但合法”“历史污染但当前安全”“有外部证据但未升级成指令”混在一起。这个问题会直接伤害 tool-use utility。
+
+第二，**五个 factor 的训练稳定性不确定**。`F1/F2/F3/F5` 在自然语言 trace 中高度纠缠：同一个 PAIR bypass 往往同时触发多个 factor，而 clean false positive 也经常被判成 multiple-factor violation。若直接训练五个 factor，模型可能学到不稳定的解释头，而不是可迁移的因果边界。用户指出的担忧是成立的：五因子全量训练的不确定度很大，不能作为下一步默认路线。
+
+第三，**teacher distillation 的创新性不足**。如果方法只是“用 GPT/DeepSeek teacher 标 F1-F5，再 LoRA 微调 7B guard”，创新性很弱。已有 guard 工作已经大量采用 policy taxonomy、reasoning trace、synthetic label、distillation 或 classifier training。teacher 只能作为 adjudicator / label generator；论文贡献不能落在 teacher 蒸馏本身。
+
+因此，当前 M2 的可靠表述是：
+
+> F1-F5 可以作为 failure-analysis lens 或 teacher-label schema，但尚未证明能成为稳定、可训练、可创新的 deployable guard 方法。
+
+**5. 当前结论与下一步**
+
+M1 的负结果说明“更多 hard negatives”不是充分方案；M2 全量 validation 说明 current-action causal factorization 有 IPI/adaptive bypass 检测信号，但还不足以直接训练。当前不应默认进入 M2 LoRA，也不应继续在五因子 prompt 上钻。
+
+如果继续沿本方向，最低限度需要先解决：
+
+- 五个 binary factor violation 标签；
+- `ALLOW/WARN/BLOCK` final decision；
+- clean counterfactual pairs：历史污染但当前动作安全、benign evidence vs instruction-laundering source、高权限但合法动作；
+- adaptive bypass 经 factor attribution 后转成 hard counterfactual pairs；
+- held-out PAIR/TAP/Agent-as-Attack 重新攻击验证。
+
+M2 第一 gate 仍然是：clean TN allow >=95%，PAIR re-block >=95%，JSON validity 接近 100%，并且必须优于 M1 hard-negative LoRA。现在尚未通过 clean gate，所以 M2 LoRA 之前必须补三类数据：
+
+1. **历史污染但当前动作安全**：让模型学会 `historical compromise != current-action BLOCK`。
+2. **高风险但授权的 clean action**：降低 ASB DPI / AgentDojo clean 的误拦。
+3. **恶意用户 / preparatory / borderline policy-ceiling**：让 `F3/F4` 在 user harmfulness 与早期准备步骤上输出 WARN/BLOCK，而不是 ALLOW。
+
+但在继续训练前，需要先做一次方向级文献审计，而不是局部修补：
+
+- 阅读/整理 50-100 篇相关工作，覆盖 tool-use guard、agent prompt injection defense、adaptive jailbreak、MCP/skill/tool poisoning、provenance/IFC、reasoning-based guard、constitutional/synthetic-data guard、continual/adversarial training。
+- 判断 factorized guard 是否已有 close prior；如果已有，当前方案必须转向更明确的新机制，而不是 teacher distillation。
+- 判断是否应该从“五因子大一统 guard”收窄为更稳定的单机制方法，例如只聚焦 current-action causal counterfactuals、attack-driven counterfactual data generation、或 adaptive robustness evaluation + targeted repair。
+- 若文献审计显示 teacher-label + LoRA 已是常规路线，则该路线不作为主创新，只能作为实验工具或 baseline。
 
 ---
 
