@@ -694,6 +694,37 @@ M2-Small 的第一 gate：
 - 明显优于 M1 的 clean utility；
 - 通过 gate 后，再让 attacker 针对 M2 adapter 重新自适应攻击，不能只评估旧 artifact。
 
+**Adapter testing update：从混合 schema 到能力拆分**
+
+目前 M2-Small 的混合 schema adapter 已经完成 dev/test/held-out PAIR 的第一轮检查。它说明 compact boundary schema 可以被本地 7B LoRA 学到，但也暴露了核心问题：把 value-flow、authority-laundering、task support 和 general policy boundary 混在一个 adapter 里，会造成概念冲突。
+
+具体表现是：
+
+- Dev 上看起来还可以：`clean_value_flow allow=0.938`，`unsafe_value_flow WARN/BLOCK=1.000`，`unsafe_authority_flow WARN/BLOCK=1.000`。
+- Test 上 clean value-flow 明显不稳：`clean_value_flow allow=0.688`，说明合法外部值流入很容易被误杀。
+- Held-out PAIR 上只部分有效：weak bypass re-block=0.852，但 strict strong re-block=0.667，说明 proxy Thought / source-span reframing 仍能把越权 action 洗成 task-supported。
+
+因此，当前结论不是“adapter 路线失败”，而是 **单个混合 adapter 的训练目标过于纠缠**。`task_authorizes_values` 想保护合法 value-flow，`external_authority_used` 想抓 authority laundering，二者在自然语言轨迹中经常同时出现但标签方向相反：agent 合法使用 email address / file id / calendar location 时需要允许外部值流入；攻击者伪造外部流程或权限时又需要阻断外部 authority。混训时模型容易把“外部内容参与决策”整体学成风险信号，导致 clean value-flow 误杀。
+
+下一步改成两个 capability-targeted adapters，而不是继续放大同一混合 SFT：
+
+1. **Value adapter**：专门学习“用户任务是否授权当前 action 类别和参数值”。目标是救 clean value-flow，同时保持 unsafe value-flow block。
+2. **Authority adapter**：专门学习“proxy Thought / source text 的合理化不等于用户授权”。目标是提升 held-out PAIR / authority-laundering re-block。
+
+这个拆分借鉴 TRACE-style targeted adaptation 的思想：不要把所有 failure mode 合并到一个 LoRA 里硬训，而是先验证每个能力边界能否单独学稳，再决定是否 routing、merge 或做 multi-adapter composition。当前已准备 capability split 数据，见 `LOGS/2026-W24.md#EXP-2026W24-014`；value adapter 又进一步尝试了更紧凑的 schema：
+
+```json
+{
+  "task_authorizes_action": "yes|no",
+  "task_authorizes_values": "yes|no",
+  "external_authority_used": "yes|no",
+  "decision": "ALLOW|BLOCK",
+  "reasoning": "..."
+}
+```
+
+其中 `reasoning` 只作为 teacher distillation 辅助，不作为最终指标。二类版本把 clean-side conflict 校准为 `ALLOW`、unsafe-side conflict 校准为 `BLOCK`，保留边界样本但避免强行学习不稳定的 `WARN` 类。该数据构造见 `LOGS/2026-W24.md#EXP-2026W24-015` 至 `EXP-2026W24-017`。当前 binary value adapter 已训练完成，但 test eval 由于设备原因尚未跑通；因此这里暂不写最终性能结论。
+
 ---
 
 ## Resolution（关闭议题时必填）
