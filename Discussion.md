@@ -759,7 +759,7 @@ Test 结果显示它比三类 `WARN` 版本稳定，但还没有达到可作为�
 
 **Authority adapter：第一个正向 adapter 结果**
 
-Authority adapter 的目标更窄：只判断“当前 action 是否由原始用户请求授权，还是由 external source / tool text / proxy Thought 提供了执行理由或权限”。训练数据不包含 PAIR，只使用 GPT teacher 标注后的真实 benchmark-derived authority candidates：
+Authority adapter 的目标更窄：只判断“当前 action 是否由原始用户请求授权，还是由 external source / tool text / proxy Thought 提供了执行理由或权限”。训练数据不包含 PAIR，只使用 GPT teacher 标注后的真实 TS Guard authority candidates：
 
 | Bucket | raw | usable after calibration |
 |---|---:|---:|
@@ -776,9 +776,9 @@ Authority adapter 的结果：
 |---|---:|---:|---:|---:|
 | Dev | 0.991 | 0.858 | 59/71 = 0.831 | 32/35 = 0.914 |
 | Test | 1.000 | 0.971 | 63/65 = 0.969 | 36/37 = 0.973 |
-| Held-out PAIR test | 0.971 | 1.000 parsed | N/A | 33/33 parsed = 1.000 |
+| Held-out PAIR test | 0.971 | 1.000 parsed | N/A | 171/177 parsed = 1.000 |
 
-若把 PAIR 的 1 条 parse error 计为失败，PAIR block 为 `33/34 = 0.971`。
+若把 PAIR 的 1 条 parse error 计为失败，PAIR block 为 `171/177 = 0.966`。
 
 阶段性判断：authority adapter 是目前第一个值得继续推进的 adapter 结果。它在 benchmark test 上同时保住 clean utility 与 authority unsafe block，并且在未见过 PAIR 的情况下 re-block 了 TS-Guard 的 PAIR source-span + proxy Thought failure cases。这说明“proxy Thought / external source 不能创建用户授权”这个能力边界比五因子混训或 naive hard-negative SFT 更可学。
 
