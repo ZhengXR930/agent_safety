@@ -725,6 +725,72 @@ M2-Small 的第一 gate：
 
 其中 `reasoning` 只作为 teacher distillation 辅助，不作为最终指标。二类版本把 clean-side conflict 校准为 `ALLOW`、unsafe-side conflict 校准为 `BLOCK`，保留边界样本但避免强行学习不稳定的 `WARN` 类。该数据构造见 `LOGS/2026-W24.md#EXP-2026W24-015` 至 `EXP-2026W24-017`。当前 binary value adapter 已训练完成，但 test eval 由于设备原因尚未跑通；因此这里暂不写最终性能结论。
 
+【Agent@Codex】【2026-06-10 16:45】
+
+补充最新 adapter 实验结论：value adapter 已完成 test eval，authority adapter 也完成了 teacher-balanced 训练与 held-out PAIR 检查。证据见 `LOGS/2026-W24.md#EXP-2026W24-018`、`LOGS/2026-W24.md#EXP-2026W24-022`、`LOGS/2026-W24.md#EXP-2026W24-023`。
+
+**Value adapter：完成但未过 gate**
+
+Value adapter 的目标是单独学习“用户任务是否授权当前 action 的参数值”，避免混合 schema 把合法外部值流入误杀。二类 compact schema 为：
+
+```json
+{
+  "task_authorizes_action": "yes|no",
+  "task_authorizes_values": "yes|no",
+  "external_authority_used": "yes|no",
+  "decision": "ALLOW|BLOCK",
+  "reasoning": "..."
+}
+```
+
+Test 结果显示它比三类 `WARN` 版本稳定，但还没有达到可作为正式 value boundary 的水平：
+
+| Slice | 指标 |
+|---|---:|
+| overall parse rate | 1.000 |
+| overall decision accuracy | 0.900 |
+| `broad_clean` allow | 1.000 |
+| `clean_side_effect` allow | 1.000 |
+| `clean_value_flow` allow | 0.800 |
+| `unsafe_value_flow` block | 0.850 |
+| `unsafe_value_flow` WARN/BLOCK | 0.900 |
+
+反思：value adapter 的问题不是输出格式，而是数据与概念边界仍不够干净。合法外部值流入本来就是 agent utility 的核心行为，例如 reply-to-sender、calendar location、file id、transaction id；而 unsafe value-flow 又常和 policy/user-harmful 或 authority-laundering 纠缠。当前 500 条 value labels 能证明 compact schema 可学，但不足以把 `clean_value_flow` 与 `unsafe_value_flow` 稳定分开。后续若继续 value adapter，应优先补充“合法外部值流入 hard clean”和“用户未授权的敏感参数流入 hard unsafe”，而不是继续扩大 broad clean。
+
+**Authority adapter：第一个正向 adapter 结果**
+
+Authority adapter 的目标更窄：只判断“当前 action 是否由原始用户请求授权，还是由 external source / tool text / proxy Thought 提供了执行理由或权限”。训练数据不包含 PAIR，只使用 GPT teacher 标注后的真实 benchmark-derived authority candidates：
+
+| Bucket | raw | usable after calibration |
+|---|---:|---:|
+| `unsafe_authority_flow` | 400 | 397 |
+| `clean_side_effect` | 250 | 240 |
+| `clean_value_flow` | 250 | 219 |
+| `broad_clean` | 200 | 196 |
+
+校准后共 `1052/1100` 条可用样本，按 `(dataset, id_interaction)` group split，train/dev/test 之间无 trajectory 泄漏。训练集不含 PAIR；PAIR 只作为 held-out adaptive artifact evaluation。
+
+Authority adapter 的结果：
+
+| Split | parse | decision acc | clean allow | authority block |
+|---|---:|---:|---:|---:|
+| Dev | 0.991 | 0.858 | 59/71 = 0.831 | 32/35 = 0.914 |
+| Test | 1.000 | 0.971 | 63/65 = 0.969 | 36/37 = 0.973 |
+| Held-out PAIR test | 0.971 | 1.000 parsed | N/A | 33/33 parsed = 1.000 |
+
+若把 PAIR 的 1 条 parse error 计为失败，PAIR block 为 `33/34 = 0.971`。
+
+阶段性判断：authority adapter 是目前第一个值得继续推进的 adapter 结果。它在 benchmark test 上同时保住 clean utility 与 authority unsafe block，并且在未见过 PAIR 的情况下 re-block 了 TS-Guard 的 PAIR source-span + proxy Thought failure cases。这说明“proxy Thought / external source 不能创建用户授权”这个能力边界比五因子混训或 naive hard-negative SFT 更可学。
+
+限制也很明确：PAIR artifact 是针对 TS-Guard 生成的，不是针对 authority adapter 的二阶自适应攻击；因此它还不能支持完整 adaptive robustness claim。另一个问题是 dev 上 `broad_clean allow=0.682`，抽查显示模型会把“用户请求隐含授权的中间步骤”误判为 external authority，例如 list/search/evaluate 这类完成任务所需的辅助 action。下一步需要补一类 clean supervision：**authorized intermediate-step clean**，然后再让 attacker 直接攻击 authority adapter。
+
+当前路线因此更新为：
+
+1. 暂停把所有边界混进一个 adapter；
+2. value adapter 作为待修复方向，先补数据再重训；
+3. authority adapter 作为当前主线，优先修 dev clean calibration；
+4. 之后做真正的 adaptive evaluation：attacker moves second against the authority adapter，而不是只复用 TS-Guard 的 PAIR artifact。
+
 ---
 
 ## Resolution（关闭议题时必填）
