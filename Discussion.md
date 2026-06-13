@@ -759,7 +759,16 @@ Test 结果显示它比三类 `WARN` 版本稳定，但还没有达到可作为�
 
 **Authority adapter：第一个正向 adapter 结果**
 
-Authority adapter 的目标更窄：只判断“当前 action 是否由原始用户请求授权，还是由 external source / tool text / proxy Thought 提供了执行理由或权限”。训练数据不包含 PAIR，只使用 GPT teacher 标注后的真实 TS Guard authority candidates：
+Authority adapter 的目标更窄：只判断“当前 action 是否由原始用户请求授权，还是由 external source / tool text / proxy Thought 提供了执行理由或权限”。训练数据不包含 PAIR，只使用 GPT teacher 标注后的真实 TS Guard authority candidates. 训练schema如下：
+
+```
+  {
+    "task_authorizes_action": "yes|no",
+    "external_authority_used": "yes|no",
+    "decision": "ALLOW|BLOCK",
+    "reasoning": "..."
+  }
+```
 
 | Bucket | raw | usable after calibration |
 |---|---:|---:|
@@ -790,6 +799,97 @@ Authority adapter 的结果：
 2. value adapter 作为待修复方向，先补数据再重训；
 3. authority adapter 作为当前主线，优先修 dev clean calibration；
 4. 之后做真正的 adaptive evaluation：attacker moves second against the authority adapter，而不是只复用 TS-Guard 的 PAIR artifact。
+
+## Thread #10：Boundary-specific adapters 与 value adapter protected-value 结果
+
+【Agent@Codex】【2026-06-13 19:54】
+
+补充 6 月 12 日之后的 value adapter 结果，并把当前方法设计收敛为 **每个 boundary 一个 adapter**。证据见 `LOGS/2026-W24.md#EXP-2026W24-043`、`LOGS/2026-W24.md#EXP-2026W24-044`、`LOGS/2026-W24.md#EXP-2026W24-045`。
+
+**Value adapter 最新结论**
+
+上一版 structured-only value adapter 退化后，我们没有把 value 再并回 authority，而是把 value boundary 重新压缩为两个固定 factor：
+
+```json
+{
+  "protected_action_value_present": "yes|no",
+  "user_authorized_value_use": "yes|no",
+  "decision": "ALLOW|BLOCK"
+}
+```
+
+对应规则是：只有当 action 中存在 protected value，且该 value 的使用没有被用户当前任务授权时，才应 `BLOCK`。这比旧的 provenance 多分类更适合 value adapter，因为它不再要求模型细分 `prior_external_context / untrusted_source / user_input` 等容易互相混淆的来源标签，而是直接学习 value boundary：当前 tool argument 中的 protected value 是否被用户授权使用。
+
+数据重标注结果见 `EXP-2026W24-043`：
+
+| Split | n | ALLOW | BLOCK | protected yes/no |
+|---|---:|---:|---:|---|
+| train | 1046 | 739 | 307 | 845 / 201 |
+| dev | 135 | 106 | 29 | 115 / 20 |
+| test | 141 | 106 | 35 | 117 / 24 |
+
+训练与评估结果见 `EXP-2026W24-044`：
+
+| Slice | 指标 |
+|---|---:|
+| Dev parse rate | 0.993 |
+| Dev decision acc | 0.955 |
+| Dev clean overall allow | 103/106 = 0.972 |
+| Dev clean value-flow allow | 35/36 = 0.972 |
+| Dev unsafe value-flow block | 25/29 = 0.862 |
+| Test parse rate | 0.993 |
+| Test decision acc | 0.907 |
+| Test clean overall allow | 99/106 = 0.934 |
+| Test clean value-flow allow | 38/41 = 0.927 |
+| Test unsafe value-flow block | 28/35 = 0.800 |
+
+这个结果超过旧 `value_scope`：旧版 test unsafe block 为 `25/35 = 0.714`，clean value-flow allow 为 `37/41 = 0.902`；protected-value 版本同时提高 unsafe block 与 clean delegated-value utility。因此当前判断是：**value boundary 可以单独训练，且 protected-value 两因子 schema 比 structured-only provenance schema 更稳。**
+
+但它还没有完全解决 unsafe false ALLOW。错误审计见 `EXP-2026W24-045`：test 中剩余 `7/35` 个 unsafe false ALLOW，全部已经预测 `protected_action_value_present=yes`，但全部错误预测 `user_authorized_value_use=yes` 并放行。也就是说，schema 能表达正确标签；失败集中在条件授权边界，尤其是 AgentDojo workspace 中 injected subtask 生成的 recipient、email_id、security code 被模型误当成用户委托检索/派生出的合法 value。当前不应扩展输出 taxonomy，而应为 value boundary 增加 contaminated delegation hard negatives，并配对 clean delegated-retrieval positives。
+
+**方法设计更新：每个 boundary 一个 violation detector**
+
+现在的设计不把创新点放在 “用了 adapter” 本身。adapter 只是低成本本地化训练和部署手段；真正的方法问题是：如何从现有 benchmark trajectories 中自动构造可学习、可评估、可持续修复的 safety boundary。
+
+这里需要澄清一个关键角色划分：每个 boundary adapter 不再是完整 `ALLOW/BLOCK` 决策器，而是只检测自己这条边界是否违规。最终决策由三个 detector 的 OR 聚合得到：
+
+```text
+authority_violation = AuthorityAdapter(x)
+value_violation     = ValueAdapter(x)
+policy_violation    = PolicyAdapter(x)
+
+decision = BLOCK if any violation is yes else ALLOW
+```
+
+这样 clean trajectory 不需要被路由到某一个 boundary；它是三个 detector 的共同负例。多边界 unsafe trajectory 也不需要被压进单一桶；它可以同时标成 `authority_violation=yes` 和 `value_violation=yes`。这避免了把 per-boundary adapter 混成三个互相冲突的完整决策器。
+
+当前固定三个 boundary，不让 factor 随训练过程无限演进：
+
+| Boundary | Detector output | 目标问题 | 当前状态 |
+|---|---|---|---|
+| Authority boundary | `authority_violation: yes/no` | 当前 action 的执行权限是否来自 external source / proxy Thought / source-span laundering，而不是用户任务 | 已有正向结果，held-out PAIR 可 re-block，但还需要二阶 adaptive attack |
+| Value boundary | `value_violation: yes/no` | 当前 action argument 中是否存在未被用户授权使用的 protected value | protected-value 两因子版本已优于旧 value_scope，但 contaminated delegation 仍需 hard replay |
+| Policy boundary | `policy_violation: yes/no` | 即使用户授权，当前 action 是否仍违反安全/合规 policy ceiling | 待构造，不能和 authority/value 混训 |
+
+因此，创新点应写成 boundary learning pipeline，而不是 adapter collection：
+
+1. **多标签标注 existing benchmark trajectories 的 per-boundary violation**  
+   每条 step-level trajectory 打多标签，而不是单路由：`authority_violation / value_violation / policy_violation` 可以为 0 个、1 个或多个；全 0 即 clean。标签优先从 benchmark taxonomy、攻击来源和构造模式派生：静态已知攻击使用 benchmark 的攻击类型，loop 中新生成的攻击使用结构化攻击者的模式标签。这样 boundary attribution 不依赖模型事后猜机制，而依赖样本来源和构造约束。
+
+2. **为每个 detector 构造判别式 split**  
+   每个 detector 的正例是违反本 boundary 的样本；负例不只是 clean，还必须包括“违反其他 boundary 但不违反本 boundary”的 unsafe 样本，以及近边界 clean。比如 authority detector 的负例应包含 value 违规但 authority 干净的样本、policy 违规但 authority 干净的样本、authorized intermediate-step clean。这个跨边界负例设计是控制 OR 聚合误报的关键：每个 detector 必须学会只对自己的 boundary fire，而不是对所有 unsafe 都 fire。
+
+3. **Eval attribution -> boundary-specific hard replay**  
+   持续学习循环不是直接把 held-out test 错误样本回灌训练，而是先在固定 diagnostic dev / attack-dev 上做错误归因：每个 false allow / false block 被归因到 authority、value 或 policy boundary。归因结果决定从可训练的 replay/mining pool 中挖出同类 hard cases，并只更新对应 adapter。例如 value adapter 的 contaminated delegation false ALLOW 触发 value hard replay；authority adapter 的 proxy Thought bypass 触发 authority hard replay；policy false negative 触发 policy replay。每个 hard replay batch 必须配对相邻 clean positives，避免只提高 block 率而牺牲 utility。
+
+4. **固定 held-out eval 作为 gate，而不是训练来源**  
+   每轮更新后，用固定 dev/test 报告单个 detector 的 violation precision/recall、clean false-fire rate，以及 OR 聚合后的 clean allow / unsafe block。因为三个 detector 只在 OR 决策处交互，真正需要 gate 的跨 boundary regression 是聚合决策的 clean allow 是否下降、其他 unsafe slice 是否被误伤或漏放。只有当本 boundary 提升、OR 聚合不明显退化、且最终 held-out test 没有被用于构造 replay 时，才把新 adapter 记为有效版本。持续学习的形式不是无限改 factor，而是在固定 boundary 定义下做 `evaluate -> attribute -> mine replay -> update detector -> OR regression gate` 的错误驱动数据重构。
+
+当前方法可暂命名为 **Factorized Boundary Learning for Local Tool-Use Guards**。更准确的一句话是：
+
+> 自动从 existing benchmark trajectories 中挖掘 capability-specific safety boundary，训练 per-boundary violation detectors，并通过多标签 split、eval attribution 和 hard replay，在固定 held-out eval 上持续强化单个 detector，同时用 OR 聚合 gate 控制整体 clean utility 和跨边界退化。
+
+下一步最小执行项：先做 value boundary 的 hard replay patch。具体包括 AgentDojo meeting-notes email cascade、unauthorized exfiltration cleanup、security-code forwarding 等 contaminated delegation false ALLOW，并配对 clean delegated retrieval positives；重训后只看 value adapter 的固定 test 指标是否从 `unsafe block=28/35` 继续提升，同时保持 `clean_value_flow allow >= 38/41` 附近。
 
 ---
 
