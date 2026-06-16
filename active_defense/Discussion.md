@@ -37,7 +37,9 @@ $\Pr_{\rho\sim\mathcal{B}_t}[m \in \mathrm{touch}(\rho)] \le \delta$
 命题 1（近零误报）
 设放置 (M) 关于良性分布 (\mathcal{B}) 是 (\delta)-separation，即对任意 (m\in M)，都有 $\Pr_{\rho\sim\mathcal{B}}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$ 则该标记检测器的误报率满足 $I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right]\le |M|\delta$ 因此，当 (|M|\delta\ll 1) 时，误报率近零。
 
-Proof. 对每个 (m\in M)，令 $A_m=\left{\rho:\ m\in\mathrm{touch}(\rho)\right}$ 也就是说，(A_m) 表示良性执行 ($\rho$) 触碰到标记 (m) 的事件。良性执行触发误报当且仅当它触碰到至少一个标记，因此有 $\left{\rho:\ \mathrm{touch}(\rho)\cap M\neq\varnothing\right}=\bigcup_{m\in M}A_m.$$ 于是，根据 (I(M)) 的定义，$I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right]=\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right].$ 由并集界（union bound）可得 $\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right]\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right].$ 又因为 (M) 关于良性分布 (\mathcal{B}) 是 (\delta)-separation，所以对任意 (m\in M)，都有 $\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]=\Pr_{\rho\sim\mathcal{B}}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$
+Proof. 对每个 (m\in M)，令 $A_m=\left\{\rho:\ m\in\mathrm{touch}(\rho)\right\}$ 也就是说，(A_m) 表示良性执行 ($\rho$) 触碰到标记 (m) 的事件。良性执行触发误报当且仅当它触碰到至少一个标记，因此有 
+$$\left\{\rho:\ \mathrm{touch}(\rho)\cap M\neq\varnothing\right\}=\bigcup_{m\in M}A_m.$$
+于是，根据 (I(M)) 的定义，$I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right]=\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right].$ 由并集界（union bound）可得 $\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right]\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right].$ 又因为 (M) 关于良性分布 (\mathcal{B}) 是 (\delta)-separation，所以对任意 (m\in M)，都有 $\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]=\Pr_{\rho\sim\mathcal{B}}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$
 因此，
 $I(M)\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]\le \sum_{m\in M}\delta=|M|\delta.$
 当 ($|M|\delta\ll 1$) 时，(I(M)) 也很小，因此该检测器在良性分布上的误报率近零。
@@ -48,7 +50,7 @@ $I(M)\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]\le \sum_{m\in M}
 ### 放置问题
 为了将检测覆盖 (D(M)) 写成一个可优化的结构，我们引入一个轻量的“位置-吸引力”假设。对攻击目标 (g)，受陷执行并不是任意触碰 affordance，而是会被 (g) 所需的某些位置、类型或能力吸引，例如凭证句柄、敏感 memory、私有文档、高权限动作或外部输出通道。受陷执行是指在攻击、诱导或组合性失效影响下，agent 产生了违反原始任务意图、安全策略或授权边界的执行轨迹。记这些可能被触碰的候选位置集合为随机变量 ($T_g$)。这里 ($T_g$) 由攻击目标 (g) 及执行上下文决定，而 defender 的放置 ($M\subseteq\mathcal{M}$) 只决定哪些候选位置被注入为可观测的标记。
 因此，当且仅当放置 (M) 覆盖了受陷执行会触碰的候选集合 (T_g)，即 ($M\cap T_g\neq\varnothing$)，该执行被检测到。于是检测覆盖可以写为:
-$$D(M)=\mathbb{E}{g\sim\mathcal{G}}\mathbb{E}{T_g}\left[\mathbb{1}\left{M\cap T_g\neq\varnothing\right}\right].$$
+$$D(M)=\mathbb{E}_{g\sim\mathcal{G}}\mathbb{E}_{T_g}\left[\mathbb{1}\left\{M\cap T_g\neq\varnothing\right\}\right].$$
 其中，($\mathcal{G}$) 是攻击目标分布，($\mathbb{1}{\cdot}$) 是指示函数。这个形式化将 marker placement 看成一个覆盖问题：选择有限的标记集合 (M)，使其尽可能覆盖受陷执行可能触碰的位置集合 ($T_g$)。
 
 **命题 2（子模性与贪心保证）** 在上述位置-吸引力假设下，(D(M)) 是关于放置集合 (M) 的单调子模函数。若每个标记关于良性分布都是 $\delta$-separation，并且放置预算 (k) 满足
@@ -58,7 +60,7 @@ $$M^\star=\arg\max_{M\subseteq\mathcal{M},\ |M|\le k}D(M)$$
 满足 $I(M^\star)\le \varepsilon.$。同时，由于 (D(M)) 是单调子模函数，在基数约束 (|M|\le k) 下，标准贪心算法可以达到 ((1-1/e)) 的近似最优覆盖，即 $D(M_{\mathrm{greedy}})\ge \left(1-\frac{1}{e}\right)D(M^\star).$
 
 **Proof.** 对固定的 (g) 和 ($T_g$)，定义覆盖函数
-$$f_{T_g}(M)=\mathbb{1}\left{M\cap T_g\neq\varnothing\right}.$$
+$$f_{T_g}(M)=\mathbb{1}\left\{M\cap T_g\neq\varnothing\right\}.$$
 该函数是单调的：如果 ($A\subseteq B$)，那么 (A) 能覆盖的 ($T_g$)，(B) 也一定能覆盖，因此
 $$f_{T_g}(A)\le f_{T_g}(B).$$
 该函数也是子模的：当已有放置集合更大时，新增一个标记带来的边际覆盖不会更高。形式化地，对任意 ($A\subseteq B\subseteq\mathcal{M}$) 和 ($m\notin B$)，都有
