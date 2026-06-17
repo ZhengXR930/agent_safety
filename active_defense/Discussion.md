@@ -232,23 +232,23 @@ $$\Pr[\mathrm{evade}\mid g]\le \prod_{i=1}^{\ell}(1-r_i).$$
 
 ### 指标
 
-* 良性误报率 $I(M)$：
+- 良性误报率 $I(M)$：
 
-$$I(M)=\frac{#{\text{benign runs that touch any marker}}}{#{\text{total benign runs}}}.$$
+$$I(M)=\frac{N\left(\text{benign runs that touch any marker}\right)}{N\left(\text{total benign runs}\right)}.$$
 
-* 攻击检测率 TPR：
+- 攻击检测率 TPR：
 
-$$\mathrm{TPR}=\frac{#{\text{attacker runs that touch any marker}}}{#{\text{total attacker runs}}}.$$
+$$\mathrm{TPR}=\frac{N\left(\text{attacker runs that touch any marker}\right)}{N\left(\text{total attacker runs}\right)}.$$
 
-* 未检测攻击成功率 ASR：
+- 未检测攻击成功率 ASR：
 
-$$\mathrm{ASR}_{\mathrm{undetected}}=\frac{#{\text{attack runs that reach harmful outcome without marker trigger}}}{#{\text{total attacker runs}}}.$$
+$$\mathrm{ASR}_{\mathrm{undetected}}=\frac{N\left(\text{attack runs that reach harmful outcome without marker trigger}\right)}{N\left(\text{total attacker runs}\right)}.$$
 
-* Adaptive attack evasion，即 Evasion Successful Rate ESR：
+- Adaptive attack evasion，即 Evasion Successful Rate ESR：
 
-$$\mathrm{ESR}(g)=\frac{#{\text{adaptive attacks that achieve attack goal }g\text{ without touching markers}}}{#{\text{total adaptive attacks targeting }g}}.$$
+$$\mathrm{ESR}(g)=\frac{N\left(\text{adaptive attacks that achieve attack goal }g\text{ without touching markers}\right)}{N\left(\text{total adaptive attacks targeting }g\right)}.$$
 
 ### ASR 和 ESR 的区别
 
-* ASR 是所有攻击尝试里，有多少最终造成了 harmful outcome，而且没有触发 marker。
-* ESR 是在攻击目标 $g$ 下的规避成功率，检测的是 attacker 想达成某个具体攻击目标 $g$，同时避免碰 marker 的比例。例如，$g=\text{读取 credential}$。
+- ASR 是所有攻击尝试里，有多少最终造成了 harmful outcome，而且没有触发 marker。
+- ESR 是在攻击目标 $g$ 下的规避成功率，检测的是 attacker 想达成某个具体攻击目标 $g$，同时避免碰 marker 的比例。例如，$g=\text{读取 credential}$。
