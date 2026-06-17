@@ -1,254 +1,87 @@
 # Discussion · 当前 Active 议题
 
-## Thread #1：现有 agent 防御几乎都是“观察”，即给已有行为打标签来判断危害，而不是“主动”防御
+> 形式化定义/命题/证明/指标见 `Formal.md`;本文件只写 idea 与方案设计,涉及数学处引用 `Formal.md` 编号。
 
-在我们的方案中，defender 主动在 agent 的能力空间中注入标记物。标记物被触碰或传播本身就是一个接近零误报的信号，因为 agent 的正常行为不应触碰这些标记；同时，标记被触发后也天然带有溯源信息。
+## Thread #1：主动注入标记物的 agent 防御
 
-这里对该方案进行形式化。在这个 idea 中，我们需要解决的问题是：“标记该往哪种、种多少、能不能被攻击者绕过”。因此，这里定义三个量：
+### 1. 问题与定位
 
-* 良性干扰 $I(M)$：正常任务执行触碰到任意标记 $m\in M$ 的概率，目标是 $\approx 0$。这是 defender 的期望，即正常流程不应触碰标记物。
-* 检测覆盖 $D(M)$：被劫持、被组合带偏或发生 spec-violation 的 agent 执行触碰到任一标记的概率。
-* 规避成本 $E(M)$：一个知道有标记、但不知道具体标记在哪里或是什么的攻击者，在不碰任何标记的前提下达成目标所必须付出的额外代价。
+现有 agent 防御大多是**观察式**:看 agent 已经产生的行为或 trace,再判断是否危险。这有两个固有问题:它在伤害将要发生时才介入;它要把"行为是否越权"判成一个分类问题,误报与漏报难以兼得。
 
-因此，主动防御的目标是：给定 agent 的能力空间和攻击目标分布，求 $M$ 以最大化 $D(M)$，同时满足 $I(M)\le \varepsilon$，并刻画 $E(M)$ 随放置密度和结构变化的下界。
+我们做**主动式**防御:defender 预先在 agent 可见的 affordance 空间中注入标记物(marker)。只要 agent 触碰或传播这些标记,就说明它偏离了正常授权路径,从而触发高置信检测与溯源。affordance 包括工具、参数、凭证句柄、memory、RAG 文档、MCP capability、文件路径、动作目标等。
 
----
+与 AgentShield 等 fixed-trap 方案的区别:它们把"诱饵"写死在某个数据集上(硬编码 honeytoken 值、白名单 IBAN、域名),既不泛化,也只能抓调用了"明显危险工具"的 naive 攻击。我们要的是**任务条件化的放置 + 对最强攻击也有覆盖**。
 
-## 对象与记号
+### 2. 核心设计原则:off-benign-path but attack-attractive
 
-**Affordance 空间。** Affordance 指环境提供给一个主体的“可做的动作可能性”，比如门把手 afford “拉/推”动作。
+marker 不是随便放,也不是单纯远离当前任务,而是放在:**任务相关 carrier 内、良性授权路径之外、攻击路径容易经过的风险边界上**。
 
-设 $\mathcal{U}$ 为一次部署中真实的 affordance 全集，包括工具、凭证句柄、memory 条目、RAG 文档、MCP capability、文件路径、动作目标、参数等。一个标记物 marker $m$ 是注入的人工 affordance，满足：
+例如邮件总结任务:不应把 `gmail.read`、`summarize` 伪装成 marker(正常任务会用,会制造误报);但可以放 canary 收件人、fake external forwarding target、credential-like attachment、sensitive-export marker。这些对正常总结是 off-path 的,对 prompt injection 或外发型攻击是 attractive 的。
 
-* 在形式上与真实 affordance 不可区分，即同类型、同 schema、同表层描述；
-* 无真实副作用；
-* 被插桩，即触发标记物会被观测。
+所以放置目标不是 off-domain,而是 **off-benign-path but attack-attractive**(对应 `Formal.md` 命题 1 的 $\delta$-separation 前提与命题 2 的覆盖 $D(M)$)。
 
-设 $\mathcal{M}$ 为候选标记全集。标记物放置动作是 defender 为 agent 注入的有限子集 $M\subseteq\mathcal{M}$。agent 看到的 affordance 空间是：
+### 3. 两类 marker:同时覆盖 naive 攻击与"贴着良性路径作恶"的最强攻击
 
-$$\mathcal{A}_M=\mathcal{U}\cup M.$$
+这是本方案区别于 AgentShield 的关键。单靠 off-path 的假 affordance,对"只用合法工具、把敏感数据编码进 subject/body 外发"的最强攻击没有覆盖(见 `Formal.md` O1)。因此我们用**两类互补 marker**:
 
-一次执行 $\rho$ 是 agent 在某任务上的一次运行，它诱导一个触碰集：
+* **(A) Affordance-marker（off-path 诱饵)**:假工具、假凭证句柄、假高权限动作。
+  作用:抓"调用了本不该出现的能力"的攻击。性质:触碰即受陷,近零误报(命题 1)。
+  局限:对 on-path 攻击无效。
 
-$$\mathrm{touch}(\rho)\subseteq\mathcal{A}_M.$$
+* **(B) Provenance / canary-marker（真实数据的不可见标记）**:不是放假数据,而是给
+  **真实**的敏感数据(凭证、私有文档、PII、memory 条目、RAG 片段)打上不可见可溯源标记。
+  作用:不管攻击用哪个工具,只要被标记的数据出现在**任意外发动作目标/参数**里,就报警。
+  这使"用合法 send_email、把数据塞进 subject"这类 on-path 外泄也能被抓——直接覆盖
+  AgentShield `defense_aware` 类暴露的盲区。同时标记天然带溯源信息,可恢复意图链。
 
-其中，触碰动作包括 invoke、read、write 或绑定为动作目标的 affordance。那么 agent 的执行被分为两种分布：
+两类 marker 的检测覆盖 $D(M)$ 在 `Formal.md` 中应分开刻画:(A) 的 $T_g$ 在 affordance 上,
+(B) 的 $T_g$ 在"敏感数据 → 外发通道"的数据流边上。组合攻击场景下 $T_g$ 进一步定义在
+信任/授权转移边上(`Formal.md` O5)。
 
-* 良性分布 $\mathcal{B}$：正常使用下的执行，即良性任务、守 scope 的行为；按任务记为 $\mathcal{B}_t$。
-* 受陷分布 $\mathcal{C}$：被劫持、被组合带偏或发生 spec-violation 的执行。
+### 4. 触发语义:commitment-touch,而非任意 touch
 
-检测器定义为：执行 $\rho$ 触发检测当且仅当：
+检测触发不采用"任意触碰(含 read/list)",而是 **提交性触碰(committing touch)**:把 marker
+绑入外发动作目标/参数,或 invoke 假能力。这样良性 agent 的探索性读取(列工具、读到一篇恰好
+带 canary 的文档)不会误报,与命题 3 的"first committing touch"语义一致(`Formal.md` O4)。
 
-$$\mathrm{touch}(\rho)\cap M\neq\varnothing.$$
+### 5. 系统:training-free 的放置 + 运行时检测
 
----
+无需训练模型,是一个 **training-free marker placement & runtime detection framework**,三层:
 
-## 干扰与覆盖
+1. **Static Marker Library**:离线维护 marker 模板库——fake tool / fake credential /
+   fake high-privilege action / canary ID / RAG marker / memory marker 等(两类 marker 都在库里)。
+2. **Task-conditioned Selector**:每个任务只做轻量选择——判断良性授权路径,过滤掉正常任务
+   必需的 affordance,在同一 carrier 的风险边界上选 attack-attractive marker。注意:Selector 只需
+   识别**粗粒度风险边界**,不需枚举所有合法动作(这正是 marker 相对 allowlist 策略的增量价值,
+   见 `Formal.md` O2)。
+3. **Offline Evolution Engine**:周期性根据攻击 trace、误报、fingerprinting 结果更新 marker 模板、
+   覆盖权重与伪装质量。伪装质量需做到**行为级**不可区分(返回一致假数据、维护一致假状态),
+   而不仅 schema 一致,否则规避下界 $r(g)$ 会被无害探测击穿(`Formal.md` O3)。
 
-**定义 1：干扰与覆盖。**
+运行时检测见 `Formal.md` §1 检测器定义(在 commitment-touch 语义下)。
 
-良性干扰，也就是误报率 FPR，定义为：
+### 6. Placement Synthesizer 流水线
 
-$$I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right].$$
+不每个任务从零生成 marker,而是:
 
-检测覆盖，也就是检测率 TPR，定义为：
+**static library → task-scope filtering → risk-boundary selection → greedy placement**
 
-$$D(M)=\Pr_{\rho\sim\mathcal{C}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right].$$
+四步:
+1. 找出当前任务的良性授权路径;
+2. 找出同 carrier 内的风险边界(以及组合场景下的信任/授权转移边);
+3. 从静态库中选出 off-benign-path but attack-attractive 的候选(两类 marker 都参与);
+4. 在预算 $k$ 下用 greedy 选覆盖最大的 marker 集 $M$(命题 2 的 $(1-1/e)$ 保证)。
 
-防御的目标为：
+### 7. 与实验的对应
 
-$$I(M)\approx 0,\qquad D(M)\to 1.$$
-
-**定义 2：$\delta$-separation。**
-
-当一个守规矩的 agent 正常做任务 $t$ 时，即 $\rho\sim\mathcal{B}_t$，它触碰到标记 $m$ 的概率不超过 $\delta$，形式化为：
-
-$$\Pr_{\rho\sim\mathcal{B}_t}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$$
-
-**命题 1（近零误报）。** 设放置 $M$ 关于良性分布 $\mathcal{B}$ 是 $\delta$-separation，即对任意 $m\in M$，都有：
-
-$$\Pr_{\rho\sim\mathcal{B}}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$$
-
-则该标记检测器的误报率满足：
-
-$$I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right]\le |M|\delta.$$
-
-因此，当 $|M|\delta\ll 1$ 时，误报率近零。
-
-**Proof.** 对每个 $m\in M$，令：
-
-$$A_m=\left{\rho:\ m\in\mathrm{touch}(\rho)\right}.$$
-
-也就是说，$A_m$ 表示良性执行 $\rho$ 触碰到标记 $m$ 的事件。良性执行触发误报当且仅当它触碰到至少一个标记，因此有：
-
-$$\left{\rho:\ \mathrm{touch}(\rho)\cap M\neq\varnothing\right}=\bigcup_{m\in M}A_m.$$
-
-于是，根据 $I(M)$ 的定义：
-
-$$I(M)=\Pr_{\rho\sim\mathcal{B}}\left[\mathrm{touch}(\rho)\cap M\neq\varnothing\right]=\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right].$$
-
-由并集界 union bound 可得：
-
-$$\Pr_{\rho\sim\mathcal{B}}\left[\bigcup_{m\in M}A_m\right]\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right].$$
-
-又因为 $M$ 关于良性分布 $\mathcal{B}$ 是 $\delta$-separation，所以对任意 $m\in M$，都有：
-
-$$\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]=\Pr_{\rho\sim\mathcal{B}}\left[m\in\mathrm{touch}(\rho)\right]\le \delta.$$
-
-因此：
-
-$$I(M)\le \sum_{m\in M}\Pr_{\rho\sim\mathcal{B}}\left[A_m\right]\le \sum_{m\in M}\delta=|M|\delta.$$
-
-当 $|M|\delta\ll 1$ 时，$I(M)$ 也很小，因此该检测器在良性分布上的误报率近零。
-
-这个命题的成立是有条件的，即放置 $M$ 是 off-task 的，在理论上 agent 触碰这一 task 无关标记的概率非常小。因此，误报由两个因素控制：第一，marker 放得越多，正常 agent 误碰任意一个 marker 的机会越大；第二，$\delta$ 越小，正常 agent 越不可能碰它。因此，这种主动防御方案具有理论上的 near-zero false positive。
+* RQ1 ↔ 命题 1:近零误报 $I(M)$,验证 off-benign-path + commitment-touch。
+* RQ2 ↔ 命题 2:greedy placement 优于 random / AgentShield-style fixed trap。
+* RQ3 ↔ 命题 2 泛化:覆盖组合风险(SCR-CapFlow/TrustLift/AuthBlur),验证转移边上的覆盖。
+* RQ4 ↔ 命题 3:adaptive attacker 在 marker 密度 $r(g)$、能力链长度变化下的规避成本。
 
 ---
 
-## 放置问题
+### 待决（高阶,留待 PI/用户拍板）
 
-为了将检测覆盖 $D(M)$ 写成一个可优化的结构，我们引入一个轻量的“位置-吸引力”假设。对攻击目标 $g$，受陷执行并不是任意触碰 affordance，而是会被 $g$ 所需的某些位置、类型或能力吸引，例如凭证句柄、敏感 memory、私有文档、高权限动作或外部输出通道。受陷执行是指在攻击、诱导或组合性失效影响下，agent 产生了违反原始任务意图、安全策略或授权边界的执行轨迹。
-
-记这些可能被触碰的候选位置集合为随机变量 $T_g$。这里 $T_g$ 由攻击目标 $g$ 及执行上下文决定，而 defender 的放置 $M\subseteq\mathcal{M}$ 只决定哪些候选位置被注入为可观测的标记。
-
-因此，当且仅当放置 $M$ 覆盖了受陷执行会触碰的候选集合 $T_g$，即 $M\cap T_g\neq\varnothing$，该执行被检测到。于是检测覆盖可以写为：
-
-$$D(M)=\mathbb{E}*{g\sim\mathcal{G}}\mathbb{E}*{T_g}\left[\mathbb{1}\left{M\cap T_g\neq\varnothing\right}\right].$$
-
-其中，$\mathcal{G}$ 是攻击目标分布，$\mathbb{1}{\cdot}$ 是指示函数。这个形式化将 marker placement 看成一个覆盖问题：选择有限的标记集合 $M$，使其尽可能覆盖受陷执行可能触碰的位置集合 $T_g$。
-
-**命题 2（子模性与贪心保证）。** 在上述位置-吸引力假设下，$D(M)$ 是关于放置集合 $M$ 的单调子模函数。若每个标记关于良性分布都是 $\delta$-separation，并且放置预算 $k$ 满足：
-
-$$k\le \frac{\varepsilon}{\delta},$$
-
-则任意满足 $|M|\le k$ 的放置都有：
-
-$$I(M)\le \varepsilon.$$
-
-因此，预算约束下的最优放置：
-
-$$M^\star=\arg\max_{M\subseteq\mathcal{M},\ |M|\le k}D(M)$$
-
-满足：
-
-$$I(M^\star)\le \varepsilon.$$
-
-同时，由于 $D(M)$ 是单调子模函数，在基数约束 $|M|\le k$ 下，标准贪心算法可以达到 $(1-1/e)$ 的近似最优覆盖，即：
-
-$$D(M_{\mathrm{greedy}})\ge \left(1-\frac{1}{e}\right)D(M^\star).$$
-
-**Proof.** 对固定的 $g$ 和 $T_g$，定义覆盖函数：
-
-$$f_{T_g}(M)=\mathbb{1}\left{M\cap T_g\neq\varnothing\right}.$$
-
-该函数是单调的：如果 $A\subseteq B$，那么 $A$ 能覆盖的 $T_g$，$B$ 也一定能覆盖，因此：
-
-$$f_{T_g}(A)\le f_{T_g}(B).$$
-
-该函数也是子模的：当已有放置集合更大时，新增一个标记带来的边际覆盖不会更高。形式化地，对任意 $A\subseteq B\subseteq\mathcal{M}$ 和 $m\notin B$，都有：
-
-$$f_{T_g}(A\cup{m})-f_{T_g}(A)\ge f_{T_g}(B\cup{m})-f_{T_g}(B).$$
-
-因此，$f_{T_g}(M)$ 是单调子模函数。又因为 $D(M)$ 是对 $g\sim\mathcal{G}$ 和 $T_g$ 的期望，即多个覆盖函数的非负线性组合，而单调子模函数的非负线性组合仍然是单调子模函数，所以 $D(M)$ 也是单调子模函数。
-
-在基数约束 $|M|\le k$ 下，单调子模函数最大化的标准贪心算法具有 $(1-1/e)$ 近似保证，因此：
-
-$$D(M_{\mathrm{greedy}})\ge \left(1-\frac{1}{e}\right)D(M^\star).$$
-
-另一方面，由命题 1 可知，如果每个标记都是 $\delta$-separation，则：
-
-$$I(M)\le |M|\delta.$$
-
-当 $|M|\le k$ 且 $k\le \varepsilon/\delta$ 时：
-
-$$I(M)\le |M|\delta\le k\delta\le \varepsilon.$$
-
-因此，预算内的最优放置 $M^\star$ 也满足 $I(M^\star)\le \varepsilon$。证毕。
-
----
-
-## 规避成本
-
-我们进一步分析 adaptive attacker 的规避成本。这里采用 Kerckhoffs 式对手模型：对手知道系统会主动注入标记，也知道标记的类型分布、生成策略和放置算法，但不知道本次部署中哪些具体 affordance 是标记。对手的目标是在达成攻击目标 $g$ 的同时，避免触碰任何标记。
-
-在这个对手知识模型下，我们引入 $S(g)$ 来刻画攻击者视角下的不可区分候选集合。对攻击目标 $g$，设 $S(g)\subseteq\mathcal{A}_M$ 为一组对手不可区分的候选 affordance，其中既包含真实 affordance，也可能包含 defender 注入的标记 affordance。直观上，$S(g)$ 表示达成目标 $g$ 所需的一类能力集合。例如，若 $g$ 是读取凭证，则 $S(g)$ 可以是一组 credential-like handles；若 $g$ 是外发敏感信息，则 $S(g)$ 可以是一组 external-output channels。
-
-攻击者要达成 $g$，必须至少触碰 $S(g)$ 中的一个 affordance；但由于真实 affordance 与标记 affordance 在类型、schema 和表层描述上不可区分，攻击者无法在触碰前可靠地区分它们。记 $S(g)$ 中标记的密度为：
-
-$$r(g)=\frac{|M\cap S(g)|}{|S(g)|}.$$
-
-**建模假设 B（能力必需与交换不可区分）。** 对每个攻击目标 $g$，存在一个候选集合 $S(g)$，满足以下两个条件。第一，能力必需性：任何成功达成 $g$ 的执行都必须对 $S(g)$ 中至少一个 affordance 做出提交性触碰。第二，交换不可区分性：在 Kerckhoffs 式对手可见的信息下，$S(g)$ 内真实 affordance 与标记 affordance 没有可利用的可区分特征；因此，对手选择 $S(g)$ 中任意 affordance 时，该 affordance 是标记的概率等于 $r(g)$。
-
-**命题 3（单目标规避下界）。** 在假设 B 下，任何成功达成目标 $g$ 的对手策略被检测的概率至少为 $r(g)$。等价地，单目标规避成功率满足：
-
-$$\Pr[\mathrm{evade}\mid g]\le 1-r(g).$$
-
-**Proof.** 由于 $S(g)$ 对目标 $g$ 是能力必需的，任何成功达成 $g$ 的对手执行都必须对 $S(g)$ 中某个 affordance 做出第一次提交性触碰。由交换不可区分性，该触碰落在标记 affordance 上的概率为 $r(g)$。一旦触碰标记，检测器即被触发。因此，对手被检测的概率至少为 $r(g)$，规避成功率至多为 $1-r(g)$。
-
-若目标 $g$ 需要依次触碰 $\ell$ 类能力集合 $S_1(g),\dots,S_\ell(g)$，并且每一步在条件于此前未触发的情况下仍满足交换不可区分性，记第 $i$ 个集合中的标记密度为 $r_i$，则每一步规避检测的概率至多为 $1-r_i$。因此，完成所有步骤且不触碰任何标记的概率满足：
-
-$$\Pr[\mathrm{evade}\mid g]\le \prod_{i=1}^{\ell}(1-r_i).$$
-
-这说明，攻击目标越依赖多步能力获取或权限扩展，攻击者需要穿过的不可区分能力集合越多，其规避成功率越低。相反，如果标记可被指纹识别，或对手能够将 $S(g)$ 缩小到只包含真实 affordance，则 $r(g)$ 不再有效，上述规避界也不再成立。因此，标记合成质量，即与真实 affordance 的同形性和不可区分性，是该下界成立的关键前提。
-
-**三个命题连起来实际上在证明：主动注入标记是一种合理的防御机制。它可以低误报 P1、可优化 P2，且具有可量化的规避成本 P3。**
-
----
-
-## 系统框架
-
-该系统不是零散放假工具，而是一个跨载体的注入-标记层，把 honeypot、canary-id 和 watermark 统一成“注入标记物”：
-
-* honey-affordance：假工具、假凭证、假高权动作；碰到即为信号。
-* canary / id 标记：给敏感数据、memory 条目、RAG 文档打不可见标记；它出现在下游 action 或 exfil 中即为信号，并支持溯源。
-
-因此，我们需要两个组件：
-
-* placement 合成器：按任务上下文和风险面，导出“最小干扰、最大覆盖”的标记集，对应形式化里的优化。
-* 触发-溯源引擎：标记点亮即高置信信号，并顺着标记关系恢复意图链。
-
----
-
-## 实验设计
-
-### 实验环境
-
-1. Single compromise：IPI 环境，用于正面和 AgentShield 对齐。
-2. Composition compromise：SCR-Bench，代表能力流动、信任转移和授权混淆的组合攻击。
-
-### 实验设置
-
-* RQ1：近零误报是否成立？
-  对应命题 1。我们测量良性执行触碰任意 marker 的概率 $I(M)$，验证 off-task marker 是否带来近零误报，并观察 $I(M)$ 是否受 $|M|\delta$ 控制。
-
-* RQ2：placement 是否比 random / fixed trap 更好？
-  对应命题 2。我们在相同 marker 预算 $k$ 下比较 greedy placement、random placement 和 AgentShield-style fixed traps，验证覆盖优化是否能带来更高的成功攻击检测率。
-
-* RQ3：能否覆盖组合风险？
-  对应命题 2 的泛化覆盖。我们在 IPI 之外进一步测试 SCR-CapFlow、SCR-TrustLift 和 SCR-AuthBlur，验证 $D(M)$ 所刻画的 marker 覆盖是否能检测组合路径中出现的受陷执行，而不是只适用于直接 prompt injection。
-
-* RQ4：adaptive attacker 是否更难绕过？
-  对应命题 3。我们构造知道防御策略但不知道具体 marker 位置的 adaptive attacker，改变不可区分集合 $S(g)$ 中的 marker 密度 $r(g)$，测量攻击者在达成目标 $g$ 且不触碰 marker 的规避成功率。若 $r(g)$ 或能力链长度增加时规避成功率下降，则说明 marker placement 对 adaptive attacker 施加了可量化的规避成本。
-
-### 指标
-
-- 良性误报率 $I(M)$：
-
-$$I(M)=\frac{N\left(\text{benign runs that touch any marker}\right)}{N\left(\text{total benign runs}\right)}.$$
-
-- 攻击检测率 TPR：
-
-$$\mathrm{TPR}=\frac{N\left(\text{attacker runs that touch any marker}\right)}{N\left(\text{total attacker runs}\right)}.$$
-
-- 未检测攻击成功率 ASR：
-
-$$\mathrm{ASR}_{\mathrm{undetected}}=\frac{N\left(\text{attack runs that reach harmful outcome without marker trigger}\right)}{N\left(\text{total attacker runs}\right)}.$$
-
-- Adaptive attack evasion，即 Evasion Successful Rate ESR：
-
-$$\mathrm{ESR}(g)=\frac{N\left(\text{adaptive attacks that achieve attack goal }g\text{ without touching markers}\right)}{N\left(\text{total adaptive attacks targeting }g\right)}.$$
-
-### ASR 和 ESR 的区别
-
-- ASR 是所有攻击尝试里，有多少最终造成了 harmful outcome，而且没有触发 marker。
-- ESR 是在攻击目标 $g$ 下的规避成功率，检测的是 attacker 想达成某个具体攻击目标 $g$，同时避免碰 marker 的比例。例如，$g=\text{读取 credential}$。
+* 两类 marker 的形式化是否如 §3 拆分,以及命题 3 在 canary-marker 上的陈述方式(`Formal.md` O1）。
+* 是否把 trigger 语义在命题 1 / 系统中统一改为 commitment-touch(`Formal.md` O4)。
