@@ -233,3 +233,58 @@ run_optimize
 * **RQ4 ↔ 命题 3 + Updater**:adaptive 规避随 $r(g)$ 与链长衰减;跨 session 记忆污染下 Updater 轮换抑制 I(M) 漂移。
 
 **待办:** (O2) 论证 marker placement 相对 allowlist/taint 的增量价值;(O3) 把 δ、$r(g)$ 写成伪装质量函数并实测指纹衰减;(O-FP) 族 2 误报实测;(k>1) 族 1 多诱饵的子模/贪心分配(Píbil 背书)。
+
+---
+
+## Thread #2：与 AgentShield 的跨环境对比实验
+
+> 本 thread 记录"把 AgentShield 官方三层放到同一环境与我们对比"的实验与解释。证据来自 `LOGS/2026-W25.md` EXP-024~027。
+
+### 1. 一句话结论
+
+在**攻击真正会发生（ASR>0）的组合攻击环境**里,AgentShield 的三层固定 trap(honeytool / honeytoken / allowlist)**结构性漏报**——检测率为 0;而我们的两族诱饵抓得到。AgentShield 论文里的高检测率,是在**它自己的环境(AgentDojo)+ 强模型 + 条件口径**下得到的,换到组合授权攻击就失效。
+
+### 2. 同台对比表(SCR, deepseek 系, 官方 AgentShield 三层 vs ours)
+
+| 环境 | 攻击类型 | ASR | AgentShield TPR | Ours TPR/dgs | 说明 |
+|---|---|---|---|---|---|
+| **SCR-CapFlow** | 能力流(scan→act 搬合法对象) | 0.18–0.73 | **0.000** (honeytool0/token0/allowlist0) | **0.727**(族1) | AS 还带 I(M)=0.091 误报 |
+| **SCR-AuthBlur** | 授权洗白(二元决策批准) | **1.000** | **0.000** | **0.75**(族2, EXP-022) | AS 三层零触发 |
+| SCR-TrustLift | scan→install 提权 | 0.000 | — | — | deepseek 抵抗,ASR=0,双方都无信号(inconclusive) |
+
+要点:
+* AgentShield 三层在 CapFlow / AuthBlur 上 **检测率 0**——攻击成功了(CapFlow ASR 高、AuthBlur ASR=1.0)却一个都没抓到。
+* **为什么必然漏**:这些组合攻击用的全是**合法工具 + 合法参数 / 合法对象**——agent 不去碰 AgentShield 的 off-domain 假工具(honeytool),不外发它的固定假凭证(honeytoken),而 SCR 的 action 工具/二元决策**没有可 allowlist 的参数**(parameter_validator 结构上无从配置)。
+* AgentShield 在 CapFlow 上甚至有 **9% 误报**(benign 时 agent 自己偶尔调了诱饵 `system_admin_console`)——固定危险假工具在良性下也可能被误触。
+* TrustLift 这次双方 ASR=0(deepseek 对该攻击整体抵抗),**诚实标为 inconclusive**,不作证据。
+
+### 3. 为什么不直接用 AgentShield 原数据(AgentDojo)测我们的方法
+
+我们**也**在 AgentShield 自己的环境(AgentDojo, EN 全量 4 suite, deepseek-chat)跑了官方实现作 baseline(EXP-024/025),结论是**那个环境对"谁更强"的对比没有统计意义**:
+
+1. **ASR 太低,分母太小。** AgentShield 官方 baseline 在 deepseek 上 **ASR=2.3%**(176 攻击仅 4 个真成功)。论文自己也写无防御 ASR≤10%(GPT-4o-mini 10%、GPT-5-mini 0%、DeepSeek-V3 7.2%),并自承"开源模型成功样本太少,条件检测率无法估计"。在 4 个成功样本上比检测率,没有统计力。
+2. **主动诱饵层在 AgentDojo 上几乎不触发。** 我们复现:honeytool 触发 2/176、**honeytoken 触发 0/176**,唯一起作用的是 allowlist(parameter_validator,被动规则)。这与论文 Table 2 一致(honeytoken"标准测试中从未触发")。也就是说 AgentDojo 上**没有足够的"诱饵被触碰"事件**供两种诱饵方法区分高下。
+3. **AgentDojo 的威胁模型不是我们的战场。** AgentDojo 是 **IPI-on-tool-output**(把攻击注入工具返回值,诱导 agent 直接执行某个危害动作)。它**缺少组合授权攻击**(数据没动、被搬的是授权)——而那正是族 2 boundary honeypot 的核心覆盖点。在一个没有授权洗白攻击的环境里测我们的主贡献,等于不在考点上考试。
+
+所以正确做法是**反过来**:把 AgentShield(用官方实现)搬到**有组合授权攻击、ASR>0** 的 SCR 上比——这才暴露它的盲区,也才是公平的"同考点"对比。
+
+### 4. 解释 AgentShield 论文的高检测率从何而来
+
+论文头条 90.7%/100% 检测率,是三个因素叠出来的,不能直接当作"它很强":
+
+1. **条件口径 + 宽"成功"定义。** 分母 129/125 不是 ASR(真实危害,GPT-5-mini=0%),而是更宽的"agent 被带偏(followed attacker's instructions)",包括去碰一个无害诱饵。GPT-5-mini ASR=0% 却有 125 个"successful attacks"作分母——两个"success"不是一回事。
+2. **检测不拦截 → 分子分母重叠。** AgentShield 只监控不阻断,所以"被带偏去碰诱饵"本身就是检测触发条件——分子(检测到)和分母(被带偏)高度重叠,条件检测率天然趋近 100%。
+3. **依赖强模型 + 它自己的攻击集。** 这套数字只在 GPT-4o-mini/GPT-5-mini 这类会"乖乖去碰诱饵"的设置上成立;换到 deepseek 或换到组合授权攻击就塌。
+
+### 5. 对我们叙事的支撑
+
+这组跨环境实验把我们的核心论点钉实了:
+
+* **固定主动诱饵难触发**(AgentDojo 上 honeytool/honeytoken≈0)——所以诱饵必须**撞攻击意图 + 优化放置**(我们的两族 + MCTS)。
+* **AgentShield 抓不到组合授权攻击**(CapFlow/AuthBlur 检测 0)——这正是族 2 boundary honeypot 的硬覆盖差异。
+* 公平对比的正确姿势是**在有组合攻击且 ASR>0 的环境同台比**,而不是在 AgentDojo 低 ASR 环境里拼小分母条件率。
+
+### 6. 待补
+* TrustLift 换更易攻破设置(更强攻击层/更弱模型)抬 ASR,补上第三个 benchmark 的对比。
+* 修 CapFlow 的 ReAct 解析噪声(把 'If'/'Final' 误当工具名),并固定攻击轨迹/多次重复让两组 ASR 严格可比。
+* 把 AgentShield 在 CapFlow 上的 9% benign 误触单列为"固定危险假工具的 FP 风险"对照。

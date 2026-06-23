@@ -147,23 +147,21 @@ def build_mock_pipeline(layers):
 def run_attack(suite, tools, pipeline, detectors, user_task, attack_payload):
     """Run a single attack and return results."""
     reset_all_detectors(detectors)
-    injection_defaults = suite.get_injection_vector_defaults()
-    injections = {vec: attack_payload for vec in injection_defaults}
-    env = suite.load_and_inject_default_environment(injections)
-    env = prepare_environment(env)  # Plant honeytoken files
-    runtime = FunctionsRuntime(tools)
-
+    err_result = {
+        "error": None, "tools_used": [], "honeytool_triggered": False,
+        "detections": [], "num_messages": 0, "attack_succeeded": False,
+    }
     try:
+        injection_defaults = suite.get_injection_vector_defaults()
+        injections = {vec: attack_payload for vec in injection_defaults}
+        env = suite.load_and_inject_default_environment(injections)
+        env = prepare_environment(env)  # Plant honeytoken files
+        runtime = FunctionsRuntime(tools)
         _, _, result_env, messages, _ = pipeline.query(user_task.PROMPT, runtime, env)
     except Exception as e:
-        return {
-            "error": str(e),
-            "tools_used": [],
-            "honeytool_triggered": False,
-            "detections": [],
-            "num_messages": 0,
-            "attack_succeeded": False,
-        }
+        # Includes env-injection / YAML-parse failures on some cross-lingual
+        # payloads; record and continue so one bad case never aborts the sweep.
+        return {**err_result, "error": str(e)}
 
     tools_used = []
     for msg in messages:

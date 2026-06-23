@@ -26,7 +26,7 @@ from openai import OpenAI
 from agentshield.defenses.honeytools import HoneytoolDetector, HONEYTOOLS, HONEYTOOL_NAMES
 from agentshield.defenses.honeytokens import HoneytokenMonitor, plant_honeytokens
 from agentshield.defenses.parameter_validator import ParameterValidator
-from agentshield.internal_client import internal_openai_client, DEFAULT_INTERNAL_MODEL
+from agentshield.internal_client import internal_openai_client, client_for_model, DEFAULT_INTERNAL_MODEL
 
 # Default system message (same as AgentDojo uses)
 DEFAULT_SYSTEM_MESSAGE = (
@@ -72,8 +72,9 @@ def build_agentshield_pipeline(
         layers = ["honeytools", "honeytokens", "parameter_validator"]
 
     if use_internal:
-        # Route through the internal OpenAI-compatible gateway.
-        client = internal_openai_client()
+        # Route through the correct backend by model name (deepseek direct,
+        # everything else via the gpt_openapi gateway).
+        client = client_for_model(llm)
         llm_element = OpenAILLM(client, llm)
         sys_msg = system_message or DEFAULT_SYSTEM_MESSAGE
         system_msg_element = SystemMessage(sys_msg)

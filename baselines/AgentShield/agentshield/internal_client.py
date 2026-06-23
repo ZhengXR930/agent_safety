@@ -22,6 +22,11 @@ DEFAULT_INTERNAL_BASE_URL = (
 )
 DEFAULT_INTERNAL_MODEL = "gpt-4o-mini-2024-07-18"
 
+# DeepSeek models are served by api.deepseek.com directly (DEEPSEEK_API_KEY),
+# NOT by the gpt_openapi gateway (which 401s with "no model permission").
+DEEPSEEK_BASE_URL = "https://api.deepseek.com"
+DEEPSEEK_MODELS = {"deepseek-chat", "deepseek-coder", "deepseek-reasoner"}
+
 
 def read_config_key(name: str, root: Path | None = None) -> str | None:
     """Read a key from the environment, else from repo-root config.txt."""
@@ -59,3 +64,41 @@ def internal_openai_client(
         api_key=key,
         default_headers=headers,
     )
+
+
+def _patch_developer_role(client: OpenAI) -> OpenAI:
+    """Rewrite role='developer' -> 'system' on outgoing chat.completions.
+
+    AgentDojo's OpenAILLM emits the system prompt with role='developer' (new
+    OpenAI convention), but the DeepSeek API only accepts system/user/assistant/
+    tool and 400s on 'developer'. We wrap create() to normalize it, so the
+    official AgentShield pipeline runs unmodified against deepseek-chat.
+    """
+    orig_create = client.chat.completions.create
+
+    def patched(*args, **kwargs):
+        msgs = kwargs.get("messages")
+        if msgs:
+            for m in msgs:
+                if isinstance(m, dict) and m.get("role") == "developer":
+                    m["role"] = "system"
+        return orig_create(*args, **kwargs)
+
+    client.chat.completions.create = patched  # type: ignore[assignment]
+    return client
+
+
+def client_for_model(model: str | None = None, *, root: Path | None = None) -> OpenAI:
+    """Route to the correct backend by model name.
+
+    DeepSeek models go direct to api.deepseek.com (DEEPSEEK_API_KEY); everything
+    else goes through the gpt_openapi internal gateway (OPENAI_API_KEY).  Mirrors
+    active_defense/code/internal_client.client_for_model so AgentShield and our
+    method run the SAME deepseek-chat backend for a fair comparison.
+    """
+    if model and model in DEEPSEEK_MODELS:
+        key = read_config_key("DEEPSEEK_API_KEY", root=root)
+        if not key:
+            raise RuntimeError("Missing DEEPSEEK_API_KEY (env or config.txt).")
+        return _patch_developer_role(OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key))
+    return internal_openai_client(root=root)
