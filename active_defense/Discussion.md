@@ -288,3 +288,13 @@ run_optimize
 * TrustLift 换更易攻破设置(更强攻击层/更弱模型)抬 ASR,补上第三个 benchmark 的对比。
 * 修 CapFlow 的 ReAct 解析噪声(把 'If'/'Final' 误当工具名),并固定攻击轨迹/多次重复让两组 ASR 严格可比。
 * 把 AgentShield 在 CapFlow 上的 9% benign 误触单列为"固定危险假工具的 FP 风险"对照。
+
+【Lead@Angus】【2026-06-24 10:31】
+
+正式拍板三点:
+
+1. **主线确定为 active_defense。** 当前论文主叙事转向主动防御:用 objective→boundary 连续谱统一两族诱饵,并用 placement optimization 控制检测率与误报率。`adapter_defense` 的 per-boundary detector 结果保留为备用路线、相关工作或后续组合模块,但不再作为当前主论文的默认主线。
+
+2. **误报指标优先补。** 做防御,尤其是主动防御时,误报不是附属指标,而是核心安全指标。主动诱饵如果放置不当,会让 agent 在无攻击时多次越界或触碰边界动作,这比普通分类 FP 更危险。因此下一轮实验优先补 `I(M)`、safe-control `I(M)`、raw control touch、多次重复下的越界稳定性,并把族 2 的 $\delta_{\text{bdry}}$ 单独作为 RQ1 重点报告。
+
+3. **AgentShield 主对比环境固定为 SCR。** AgentDojo/deepseek 上 ASR 太低、诱饵触发分母太小,只适合作为解释 AgentShield 条件口径和固定诱饵局限的诊断附表。真正公平的同台对比应放在 SCR 组合授权攻击上:CapFlow 与 AuthBlur 是当前主证据;TrustLift 只有在先把攻击 ASR 抬到 `>0` 后才进入主表。
