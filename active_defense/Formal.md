@@ -1,245 +1,100 @@
-# Formal · 主动防御的形式化背景
+# Formal · 主动防御的形式化
 
-> 本文件是 **形式化 single source of truth**:记录对象、定义、命题、证明与评测指标。
-> `Discussion.md` 负责 idea 与方案设计,涉及数学时引用本文件编号。
+> 形式化 **single source of truth**:对象、定义、命题、证明、指标。`Discussion.md` 讲 idea 与做法,涉及数学引用本文件编号。
+> 本版按 2026-W26 实验结论重写:核心轴从"objective→boundary 统一谱 + 三命题优化"改为 **不可避免性(unavoidability)**;删去被证伪的子模优化(命题 2,ε-预算 no-op)与几何中点放置。
 
 ---
 
 ## 1. 对象与记号
 
-**Affordance。** affordance 指环境提供给主体的"可做动作的可能性"。设 $\mathcal{U}$ 为一次部署中
-真实的 affordance 全集(工具、凭证句柄、memory、RAG 文档、MCP capability、文件、动作目标、参数等)。
-标记物 marker $m$ 是注入的人工 affordance,满足:
+设 $\mathcal{U}$ 为一次部署中真实的 affordance 全集(工具、凭证、数据、动作目标、MCP capability、参数等)。
+**marker** $m$ 是注入的人工 affordance:(i) 与真实同类**不可区分**;(ii) 无真实副作用;(iii) 被插桩,触发即可观测。
+放置 $M\subseteq\mathcal{M}$,agent 看到 $\mathcal{A}_M=\mathcal{U}\cup M$。两种执行分布:良性 $\mathcal{B}$ 与受陷 $\mathcal{C}$。
 
-* 与真实 affordance 表层不可区分(同类型、同 schema、同描述);
-* 无真实副作用;
-* 被插桩,触发即被观测。
+**commitment-touch。** "触碰"统一指**提交性触碰**:把 marker 绑入一个**会产生效果的动作**(invoke、绑为外发/特权/状态变更动作的目标或参数)。**单纯 read/list/提及不算。** 记 $\mathrm{touch}(\rho)\subseteq\mathcal{A}_M$。
 
-设 $\mathcal{M}$ 为候选标记全集,放置 $M\subseteq\mathcal{M}$。agent 看到 $\mathcal{A}_M=\mathcal{U}\cup M$。
-执行分两种分布:良性 $\mathcal{B}$(守 scope,按任务记 $\mathcal{B}_t$)与受陷 $\mathcal{C}$(被劫持/组合带偏/spec-violation)。
+**检测器(policy-free)。** $\rho$ 触发检测 $\iff \mathrm{touch}(\rho)\cap M\neq\varnothing$。运行时**不传标签、不跑违规策略**,只判触碰集交集是否非空。
 
-**commitment-touch(全局统一触碰语义)。** 全文"触碰"统一指**提交性触碰**:把 marker(或带 marker
-的载体)**绑入一个会产生效果的动作**——invoke 一个动作、把 marker 绑入外发/特权动作的目标或参数。
-**单纯 read / list / 浏览不算触碰。** 记一次执行的提交性触碰集为 $\mathrm{touch}(\rho)\subseteq\mathcal{A}_M$。
-
-**检测器(policy-free)。** 执行 $\rho$ 触发检测当且仅当 $\mathrm{touch}(\rho)\cap M\neq\varnothing$。
-检测端不传播标签、不跑违规策略——只判一个触碰集合的交集是否非空。
-
-### 1.1 核心贡献:一条 objective→boundary 连续谱上的统一放置-检测框架
-
-本工作的核心**不是"又一种诱饵"**,而是**第一个统一的诱饵放置形式化**:同一个 policy-free 的
-commitment-touch 检测器,作用在一条从 **objective**(攻击者想拿走/外发/选用的对象)到 **boundary**
-(攻击者想跨越的授权)的连续谱上。谱上的标记共用同一套 $\delta$-separation(命题 1)、子模覆盖放置
-(命题 2)、规避成本下界(命题 3);两端只是命题 3 中不可区分候选集 $S(g)$ 的**论域不同**(见推论 3.1 与 §7),
-是**同一命题的两个实例**,而非两种拼接的机制。
-
-> **为什么"合起来"才是贡献。** 拆开看,每一端都能被指认为既有工作的某一层(objective 端 ≈ AgentShield 的
-> honeytoken,boundary 端 ≈ honeytool / honey-permissions)。AgentShield 把 honeytool / honeytoken / 参数校验
-> 三层**经验性拼接**,没有把它们统一起来的理论。本工作的增量是给出那条统一轴 + 三条共用命题:
-> **统一形式化(合起来才有)、boundary 端的理论护城河、跨威胁模型评估**。
-
-谱的两个端点:
-
-* **族 1 · objective-level honeypot $M_{\text{obj}}$(谱的对象端)。** 诱饵放在**攻击目标对象**上:注入本任务
-  用不到的假对象/假数据(假凭证、假记录、假目标资源)。提交性触碰 = 该诱饵对象被绑入外发/写外部/授权/删除
-  等效果动作的目标或参数。**真实敏感数据从不进入 agent**;触发的永远是"假值被提交使用",不跟踪任何真实源
-  (这是它与 IFC 的根本分界,见 §6)。
-
-* **族 2 · boundary-level honeypot $M_{\text{bdry}}$(谱的边界端)。** 诱饵放在**affordance 的角色/授权边界外侧**:
-  在 skill / tool / MCP capability 的正常职责边界外注入一个无副作用的诱饵边界动作(假提权、假批准、假执行交接)。
-  提交性触碰 = invoke / bind 该未授权诱饵动作。详见 §7。
-
-> **两端分工(基于这条轴重新定性)。**
-> * **族 1 = 覆盖完整性的"地板",不是卖点。** 作用有二:(i) 证明统一框架在谱的 objective 端也成立(命题 1
->   近零误报 + 推论 3.1 外发型下界);(ii) 提供与 AgentShield 直接对齐的对照点。只保留**原子 honeytoken**
->   (假 IBAN/email/ID,逐字搬运,TPR≈0.67),**不含任何 source→sink 内容流溯源**(那是 IFC,见 §6)。
-> * **族 2 = 全部重量所在(承重墙)。** 卖点收窄到三件 AgentShield / honey-permissions 都没有的东西:
->   ① **几何中点放置**——scope→危险轴上的中点 + 命题 2 子模/贪心;② **规避成本下界**——命题 3 在 boundary
->   action 上的 $\prod_i(1-r_i)$;③ **MCP capability 边界实例化**——把诱饵能力放在 MCP 声明 scope 之外
->   (目前空白领域)。
->
-> **统一轴的代价(必须正视)。** 两端的 $\delta$ 性质并不相同:objective 端 $\delta_{\text{obj}}\approx0$ 是
-> **by construction**(假 IBAN 良性流程根本不会外发);boundary 端 $\delta_{\text{bdry}}$ 是**待实测的经验量**,
-> 很可能非平凡(命题 1')。因此"两族共用命题 1"必须配一句:RQ1 **分两族分别实测 $\delta$**,诚实写出
-> "objective 端构造保证、boundary 端实测经验量"。
-
----
-
-## 2. 近零误报(命题 1)
-
-**定义 1(干扰与覆盖)。**
 $$I(M)=\Pr_{\rho\sim\mathcal{B}}[\mathrm{touch}(\rho)\cap M\neq\varnothing],\qquad
   D(M)=\Pr_{\rho\sim\mathcal{C}}[\mathrm{touch}(\rho)\cap M\neq\varnothing].$$
-防御目标:$I(M)\approx 0,\ D(M)\to 1$。
-
-**定义 2($\delta$-separation)。** 称放置 $M$ 关于良性分布是 $\delta$-separation,若对任意 $m\in M$,
-$\Pr_{\rho\sim\mathcal{B}}[m\in\mathrm{touch}(\rho)]\le\delta$。
-
-**命题 1(近零误报)。** 若 $M$ 是 $\delta$-separation,则 $I(M)\le|M|\delta$。当 $|M|\delta\ll1$ 时误报近零。
-
-**证明。** 令 $A_m=\{\rho:m\in\mathrm{touch}(\rho)\}$,则误报事件 $=\bigcup_{m\in M}A_m$。由并集界与
-$\delta$-separation,$I(M)\le\sum_{m\in M}\Pr_{\mathcal{B}}[A_m]\le|M|\delta$。$\blacksquare$
-
-**前提。** 命题 1 成立**当且仅当** $\delta$ 确实小,即放置真的 off-benign-path。$\delta$ 不是天然成立的,
-而是放置质量的函数:
-
-* **族 1** 的 $\delta_{\text{obj}}$:良性 agent 不会把一个"任务用不到的假对象"绑进效果动作——这通常容易成立
-  (假对象与任务无关)。
-* **族 2** 的 $\delta_{\text{bdry}}$:**这是本方法最需实测的量,不可在定义里假设其近零**(见 §7 与命题 1')。
-
-**命题 1'(族 2 的误报不是自动近零)。** 族 2 的近零误报依赖一个**经验前提**:守授权的良性 agent 正常
-执行 $\mathcal{B}_t$ 不对授权边界外动作做提交性触碰。但良性 agent 本身存在**无攻击的 spec-violation**
-(良性输入下自发越界);设该越界率为 $\beta$,则 $\delta_{\text{bdry}}\gtrsim$(越界且触到诱饵边界动作的比例),
-**可能非平凡**。故族 2 的 $\delta_{\text{bdry}}$ 必须由 RQ1 **单独实测**,并允许它 $>0$;若非零则进入 limitation,
-而非当作命题 1 的显然推论。(经验背景:已有审计观察到约三成 skill 在良性输入下即违反自身 guardrail。)
-
-**为何 $\delta_{\text{bdry}}$ 大概率远低于该 $\beta$(但非构造性 0)。** 审计观测到的 $\beta\approx29.9\%$ 是 agent
-用**真实 affordance** 越自己的 guardrail;而族 2 的诱饵是**预埋、无副作用、本任务根本用不到的假边界动作**,
-再叠加 P2 **只认 commitment-touch、不认 read/list**。三重过滤(假动作 vs 真动作、off-path vs 任务内、提交 vs 浏览)
-使 $\delta_{\text{bdry}}\ll\beta$,但它仍是经验量、不是构造性的 0。这正是合并框架逼出的更严谨实验设计:
-RQ1 须给出 objective 端(构造保证)与 boundary 端(实测)两条独立的 $\delta$ 报告。
+目标:$I(M)\approx0,\ D(M)\to1$。
 
 ---
 
-## 3. 覆盖与放置优化(命题 2)
+## 2. 核心原理:不可避免性(unavoidability)
 
-对攻击目标 $g$,受陷执行会被 $g$ 所需的某些位置吸引(凭证、敏感对象、未授权高权限动作、外发通道)。
-记这些候选位置为随机集合 $T_g$(由 $g$ 与上下文决定);放置 $M$ 决定哪些候选被注入为可观测标记。
-当且仅当 $M\cap T_g\neq\varnothing$ 时该执行被检测。于是
-$$D(M)=\mathbb{E}_{g\sim\mathcal{G}}\,\mathbb{E}_{T_g}[\mathbb{1}\{M\cap T_g\neq\varnothing\}].$$
+marker 只有**被触碰**才检测得到。对自适应对手,鲁棒性的**唯一来源**是:marker 落在对手为达成目标 $g$ **绕不开**的元素上。两族是"不可避免性"的两个实例,区别在**什么不可避免**与**检测如何观测**:
 
-**命题 2(子模性与贪心保证)。** $D(M)$ 单调子模;在预算 $k\le\varepsilon/\delta$ 下任意 $|M|\le k$ 满足
-$I(M)\le\varepsilon$,且贪心达到 $(1-1/e)$ 近似:$D(M_{\mathrm{greedy}})\ge(1-1/e)\,D(M^\star)$。
+* **族 1 · PLANT(对象端)。** 诱饵是**不可区分的 must-take 诱饵**:混入对手必须处理的敏感对象集,对手**无法把它从目标里排除**(因为分不出真假)。检测是 **outcome-based**:诱饵 id 必然出现在对手为达成 $g$ 而产生的**效果状态**里。
+* **族 2 · WRAP(边界端)。** 诱饵是**不可避免的 affordance 割集**:每条 in-scope→off-scope 的通路都被插桩(cut-set 完整覆盖),对手**无法绕道**。
 
-**证明。** 固定 $g,T_g$,覆盖函数 $f_{T_g}(M)=\mathbb{1}\{M\cap T_g\neq\varnothing\}$ 单调子模(集合覆盖)。
-$D(M)$ 是其在 $g\sim\mathcal{G},T_g$ 上的非负线性组合(期望),仍单调子模,标准贪心有 $(1-1/e)$ 保证。
-误报由命题 1:$|M|\le k\le\varepsilon/\delta\Rightarrow I(M)\le k\delta\le\varepsilon$。$\blacksquare$
-
-> 两族都套用命题 2,只是 $T_g$ 论域不同:族 1 的 $T_g$ 在外发槽位/目标对象上,族 2 的 $T_g$ 在
-> affordance 边界动作上(§7)。
+> 不是"又一种诱饵",而是**把 marker 放在目标绕不开的元素上**这一条原理的两种落地。下面分别给出各自的鲁棒性命题与**成立前提**——两族的前提**不对称**,这是本版最重要的修正。
 
 ---
 
-## 4. 规避成本(命题 3)
+## 3. 近零误报(命题 1)
 
-Kerckhoffs 对手:知道系统会注入标记、知道类型分布与放置算法,但**不知道本次部署哪些具体 affordance
-是标记**;目标是达成 $g$ 且不触碰任何标记。引入对手不可区分的候选集合 $S(g)\subseteq\mathcal{A}_M$(含真实
-与标记),标记密度 $r(g)=|M\cap S(g)|/|S(g)|$。
+**定义($\delta$-separation)。** 放置 $M$ 关于良性是 $\delta$-separation,若 $\forall m\in M:\ \Pr_{\rho\sim\mathcal{B}}[m\in\mathrm{touch}(\rho)]\le\delta$。
 
-**假设 B(能力必需 + 交换不可区分)。** 对每个 $g$ 存在 $S(g)$ 满足:(i) 任何成功达成 $g$ 的执行必须对
-$S(g)$ 中至少一个 affordance 做提交性触碰;(ii) 在对手可见信息下 $S(g)$ 内真实与标记无可利用区分特征,
-故任选其一是标记的概率为 $r(g)$。
+**命题 1。** 若 $M$ 是 $\delta$-separation,则 $I(M)\le|M|\delta$;$|M|\delta\ll1$ 时误报近零。
+*证明。* $I(M)=\Pr[\bigcup_{m}A_m]\le\sum_m\Pr_{\mathcal{B}}[A_m]\le|M|\delta$。$\blacksquare$
 
-**命题 3(单目标规避下界)。** 在假设 B 下,任何成功达成 $g$ 的对手被检测概率 $\ge r(g)$,即
-$\Pr[\mathrm{evade}\mid g]\le 1-r(g)$。多步($\ell$ 类能力)下 $\Pr[\mathrm{evade}\mid g]\le\prod_{i=1}^{\ell}(1-r_i)$。
-
-**证明。** 由能力必需性,成功执行必对 $S(g)$ 做第一次提交性触碰;由交换不可区分性,该触碰落在标记上的
-概率 $r(g)$,触碰即检测。多步时每步条件于此前未触发仍交换不可区分,概率连乘。$\blacksquare$
-
-**失效条件。** 若标记可被指纹识别,或对手能把 $S(g)$ 缩小到只含真实 affordance,则 $r(g)$ 失效。
-**标记合成质量(与真实 affordance 的行为级不可区分)是下界成立的关键前提**(见 §6 的 O3)。
-
-**推论 3.1(族 1 在外发型目标上的下界)。** 设 $g=$"外发某敏感数据"。令 $\mathcal{O}$ 为所有外发动作
-目标/参数槽位构成的不可区分候选集合,objective 诱饵密度 $r_{\text{obj}}(g)=|M_{\text{obj}}\cap\mathcal{O}|/|\mathcal{O}|$。
-外发必须把内容提交到某槽位(能力必需),且族 1 把诱饵假值混入候选(交换不可区分),故
-$\Pr[\mathrm{evade}\mid g]\le 1-r_{\text{obj}}(g)$。
-
-**三命题整体含义:主动注入标记是合理防御——低误报(P1,但族 2 需实测)、可优化(P2)、有可量化规避成本(P3)。**
+**benign-fit(怎么逼近 $\delta\to0$)。** 从**纯良性数据**按 role-class 学每个 marker 的良性触碰率 $\hat\delta$,**withhold** 掉 $\hat\delta>\tau$ 的 marker。关键不对称:**FP 可由良性数据自校正(benign-fit 兜),漏覆盖不行(良性里没有攻击信号)。** 故放置策略是"保留所有 FP-clean",不是子集预算优化(见 §7 优化器退场)。
+*实测:* AuthBlur 完整框架 $I(M)=0.000$(EXP-2026W26-001)。
 
 ---
 
-## 5. 评测指标
+## 4. 族 1:PLANT — 不可区分 + outcome-based 检测
 
-* 误报率 $I(M)=N(\text{benign runs touching any marker})/N(\text{benign runs})$。
-* 检测率 $\mathrm{TPR}=N(\text{attack runs touching any marker})/N(\text{attack runs})$。
-* 未检测攻击成功率 $\mathrm{ASR}_{\text{undetected}}=N(\text{harmful outcome without marker trigger})/N(\text{attack runs})$。
-* 攻击成功条件下的检测 $\mathrm{dgs}=N(\text{success}\wedge\text{trigger})/N(\text{success})$
-  ——优化目标用这个,避免把"被诱饵扰乱致攻击失败"误算成检测。
-* Adaptive 规避成功率 $\mathrm{ESR}(g)$:达成 $g$ 且规避所有标记的比例。
+**定义(certify-gate,不可区分性)。** 诱饵 $m$ 经认证当且仅当一个独立 **Distinguisher** 在 $[m]\cup\text{peers}$(位置轮转)中挑出 $m$ 的命中率 $\le$ chance$+$margin(挑不出来=不可区分)。生成→认证→不过则由 Camoufleur 重做(拒绝采样);仍不过则丢弃(可区分诱饵是**有害混淆**,宁缺毋滥)。
 
----
+**命题 P(PLANT 规避下界,outcome-based)。** 设目标 $g=$"对敏感对象集施加效果动作",检测读取**效果状态**(诱饵 id 是否出现在副作用里)。令不可区分候选集 $S(g)$ 含真实敏感对象与诱饵,诱饵密度 $r=|M\cap S(g)|/|S(g)|$。若诱饵经 certify-gate 认证(交换不可区分),则任何达成 $g$ 的对手触碰诱饵概率 $\ge r$,$\Pr[\mathrm{evade}\mid g]\le 1-r$。
 
-## 6. 边界:为什么不把 IFC 塞进方法
+**关键:对开放执行环境鲁棒。** 检测读的是对手**为达成 $g$ 必须产生的 outcome**,**不依赖对手运行 defender 的任何代码**。故对手即便控制执行环境(裸 shell、复刻文件写入、剥离插桩)也**无法靠"避开我们的代码"逃脱**——它要达成目标就得把效果写出来,而不可区分使它排除不掉诱饵。这正是 PLANT 在开放基座里**强于** WRAP-in-band 的根因(§7 主结论)。
+*实测:* 同一知情开放-shell 对手下 outcome 检出 **8/8(0% 逃逸)**,WRAP-in-band 仅 27%(EXP-2026W26-005)。
 
-**主动 thesis。** 本方法是 manufacture-then-observe:埋假物、看假物是否被提交触碰;**运行时不跟踪任何
-真实数据/不跑 source→sink 内容流策略**。这是它区别于被动 IFC 的本质。
-
-**据此排除的设计(重要,避免自相矛盾)。** 一种"声明真实敏感源 → 观测其进入上下文 → 当外发参数与已读源
-内容覆盖超阈值时触发"的数据流溯源做法,**本质就是 confidentiality taint tracking**:打标真实源、跟踪到 sink、
-用一个覆盖阈值作违规策略。它与本方法在族 2 拒绝"标签传播 + 判流"的理由直接冲突——同一个机制不能在一处
-当违背 thesis 删掉、在另一处当"补充"留着。
-
-**更硬的理由:它会让族 1 掉进必比 baseline 的同类。** 这种 source→sink 内容流溯源在机制上**就是 Fides /
-AgentArmor 那条 IFC 路线**(声明源、跟踪进入上下文、sink 处判覆盖)。而本工作整篇卖点是"policy-free、不传
-标签、与 IFC 对立"。留着它不只是族内自相矛盾,更会让 reviewer 直接问"那族 1 跟 Fides 的区别到底是什么"。
-**因此族 1 数据载体只保留原子 honeytoken**(假 IBAN / 假 email / 假 ID:逐字搬运、假值出现在外发即触碰、
-不跟踪真实源、无阈值策略)。想要改写式外泄的覆盖,就把 IFC(Fides / AgentArmor)摆成**被动 baseline 去对比**,
-绝不塞进主动框架。
-
-**对改写式外泄的诚实态度。** "散文式摘要/改写后外发"使诱饵假值不再原样出现,taint 也穿不过 LLM 语义改写
-——这是**所有方法共有的威胁上限**,留作 open problem。删掉上述 IFC 式补充与这条 limitation 完全一致:
-族 1 只对**原子秘密/对象的提交性外发或选用**给近零误报保证。
-
-### 6.1 开放问题
-* **O2(Selector 的循环论证)。** $\delta$ 小依赖准确识别良性授权路径;需论证 marker 相对 allowlist 的
-  增量价值(只需粗粒度边界、提供主动信号与溯源、把"是否越权"转成"是否触碰")。
-* **O3(指纹抗性 / 伪装保真)。** marker 无副作用 → 行为级可被探测;需把 $\delta$、$r(g)$ 写成合成质量的
-  函数,并实测无害探测后 $r(g)$ 的衰减。
-* **O-FP(族 2 误报)。** 命题 1' 指出 $\delta_{\text{bdry}}$ 可能非平凡;RQ1 必须单独实测,非零则写入 limitation。
-
-### 6.2 已吸收的实证约束(载体选择)
-* **族 1 载体保真度**:不可见 Unicode 标记 / 可见哨兵串因 LLM 转发**不保真复制**而失效(canary TPR=0,
-  EXP-2026W25-002)。可行载体是**结构化假标识符**(假 IBAN / email / ID):模型无语义先验可纠正不透明 ID,
-  逐字搬运,实测 TPR=0.67 / I(M)=0(EXP-008)。自然语言品牌词扰动会被纠错(EXP-007),不可用。
-* **族 2 placement**:per-affordance 边界半径(靠外保守↔靠内激进)需优化:太靠外漏报、太靠内反而扰乱
-  攻击链(ASR 崩)。MCTS 搜索 + disruption-aware reward 在 SCR-AuthBlur 上把 dgs 从单点 0.33 提到 0.75、
-  I(M)=0(EXP-021/022)。
+**授权 / 权限是 PLANT 的一个实例(不是 WRAP)。** "授权"语义同样收进"分不出真假"这一支:埋一条**不可区分的假"已预授权"凭证**;目标 $g=$"执行某特权动作",对手要达成就**必须给出授权依据**,而依据集 $S(g)$ 中混入的假授权排除不掉 → 引用即 commitment-touch,且该引用落在 outcome(action record / 输出)里。良性任务不执行该特权动作 → $\delta\approx0$(构造性)。*实测(EXP-2026W26-006,开放 shell):* 假授权诱饵 **5/5 抓、FP 0/5**;同对手对"逼 agent 来申请授权"的网关 **0/5**。AuthBlur 的 `prior_authorization` 是其 speech-act 特例。
 
 ---
 
-## 7. 族 2:boundary-level honeypot 的形式化
+## 5. 族 2:WRAP — 能力中介咽喉 + 三个前提
 
-**动机。** 组合攻击(TrustLift / AuthBlur)每步单看都被授权,危害是跨步涌现的,且常常**不是泄露某条数据,
-而是授权边界被洗糊**。族 1 的 objective 诱饵不直接覆盖"授权被非法扩张"。
+**定义(WRAP = cut-set 覆盖)。** 在 affordance/dataflow 图上,wrap 是覆盖**每条** in-scope→off-scope 结果路径的割;保留所有 FP-clean 割边(漏一条即被自适应对手绕行)。
 
-**定义 7.1(授权域与 boundary action)。** 部署的 affordance 可按粒度 $\ell\in\{\text{skill},\text{tool},\text{MCP}\}$
-划分。对被包装 affordance $a$,其正常职责范围记 $\mathcal{P}_{\text{auth}}(a)$,边界外但对攻击有吸引力的下游
-执行/授权范围记 $\mathcal{P}_{\text{bdry}}(a)$。boundary-level honeypot $m_{\text{bdry}}(a)$ 是注入 $\mathcal{P}_{\text{bdry}}(a)$
-一侧的无副作用诱饵动作:形如一次真实的准备/批准/提权/执行交接,但**本任务对 $a$ 的授权并不覆盖它**,且被插桩。
+**命题 W(WRAP 抗自适应 ⟺ 三前提)。** WRAP 对知情自适应对手成立,**当且仅当**同时满足:
 
-**定义 7.2(检测,policy-free)。** 触发当且仅当 $\mathrm{touch}(\rho)\cap M_{\text{bdry}}\neq\varnothing$,触碰 = 对诱饵
-边界动作的**提交性触碰**(invoke / 绑为目标)。检测端不传播信任标签、不跑授权策略;被洗白授权的 agent
-"以为自己被授权"而执行 $m_{\text{bdry}}$,从而触发。
+* **(W1) effectful harm。** 危害需要 invoke 一个能力(非纯文本 speech-act)。否则不存在可割的 actuation 边界。
+* **(W2) 基座强制中介。** 中介由执行基座**在 agent 触及范围之外**强制(runtime / tool 层拦截调用),**不是** agent 自己运行、能读能改的 in-band 代码。
+* **(W3) 有界 affordance 面。** agent **无法在被中介能力之外复刻效果**(无裸 shell / 无直接 IO)。
 
-**误报(关键,不当显然)。** off-path 直觉是:守授权的良性 agent 知道职责边界,正常执行不触碰
-$\mathcal{P}_{\text{bdry}}(a)$。但由命题 1',这只是**经验前提**:良性 agent 存在自发越界,故
-$\delta_{\text{bdry}}$ 可能非零。**结论:族 2 的近零误报不是定义推论,而是待 RQ1 实测的命题。**
+**负结果(EXP-2026W26-004)。** 把 recorder **焊进 agent 自己运行的脚本**(in-band 中介)违反 W2+W3:CapFlow-over-CLI(裸 shell)下知情对手读穿明文 telemetry,import 后剥离 / 直接复刻副作用,**caught\|acted=27%(73% 绕过)**;agent transcript 自述 *"telemetry stripped before execution"*。而有界 function-call probe(满足 W1–W3)下知情对手 **0% 逃逸**。
 
-**放置端 vs 检测端分离。** 授权域划分(决定每个 $a$ 的 $\mathcal{P}_{\text{bdry}}(a)$、往哪个粒度埋诱饵)
-**只在离线放置端用一次**(粗粒度、便宜);运行时只判触碰。即:授权分析(若用)只活在放置端,绝不进入
-运行时检测。
+**违反 W1 的退化:speech-act harm。** AuthBlur 的危害是纯文本决策(grader 直读),无执行层 → **结构上无咽喉**。明文 gateway 只能抓"自愿合规的洗白 agent",知情对手 prose 直接写 approved 即绕(EXP-2026W26-003:prose-escape 知情对手 90% 逃逸)。
 
-**覆盖与规避。** 套用命题 2/3,$T_g$ = "达成越权目标必须跨越的边界动作集合";$D(\cdot)$ 单调子模($(1-1/e)$),
-规避下界 $\Pr[\mathrm{evade}\mid g]\le 1-r_{\text{bdry}}(g)$,多步 $\le\prod_i(1-r_{\text{bdry},i})$。族 2 与族 1
-同构为 manufacture-then-observe,只是诱饵从 objective 换成 affordance boundary action。
+**WRAP 的残余领地(收窄)。** 一个能力**无法被中介**,如果对手握有一个**涵盖它的更通用能力**(裸 shell/代码执行可复刻该效果)。skill 能跑代码是常态 → 凡**开放 shell 可复刻的效果(数据外传、本地状态改动、甚至"授权")都不归 WRAP,归 PLANT**。WRAP 只剩**本地不可复刻的特权/外部效果**:actuation 在 agent 触及范围外、且只经被中介能力达成(典型 = **MCP server 端**:发企业邮件、改生产 IAM、写远端库——agent 即便有 shell 也无凭证/网络路径自行复刻)。即:**WRAP ⟺ effect 不可被对手的最通用 affordance 复刻**;这正是 W2∧W3。
 
-**族 2 的三条护城河(卖点收窄)。** boundary action 这一机制本身(假提权/假批准)与 honeytool / honey-permissions
-重叠,故族 2 能 claim 的不是"有边界诱饵",而是以下三件既有工作都没有的东西:
+---
 
-1. **几何中点放置。** scope→危险轴上存在一个最优"中点":太靠外(保守措辞)漏报、太靠内(激进措辞)反而
-   扰乱攻击链。把每个 affordance 的放置参数化为边界半径,用命题 2 的子模/贪心(+ 黑盒搜索)求解。
-   honey-permissions 用风险阈值启发式,无此几何放置理论。
-2. **规避成本下界。** 命题 3 给出 $\prod_i(1-r_{\text{bdry},i})$ 的可证下界;AgentShield 纯经验、honey-permissions
-   启发式,都无规避成本保证。
-3. **MCP capability 边界实例化。** 把诱饵能力放在 **MCP 声明 scope 之外**——据调研目前是空白领域,
-   是统一框架在 boundary 端的一个新实例。
+## 6. 评测指标
 
-**SCR 映射 + 可落地性。**
-* CapFlow → 族 1(honey-target / honey-credential 注入 inventory)。
-* TrustLift / AuthBlur → 族 2 boundary action。已核实两者 harness 都能注入诱饵边界动作并观测其是否被
-  invoke:**AuthBlur** 经 SKILL.md 注入 per-affordance 边界动作 + sandbox 触碰日志(EXP-022 跑通);
-  **TrustLift** 把 honey skill 绑定 scan→install 提权边界,仅当 agent 真执行 installer 才装上,检测信号是
-  文件系统副作用。族 2 主实验可落地。
+* $I(M)$:良性触碰任一 marker 的比例(主安全指标)。
+* $\mathrm{TPR}$:攻击触碰 marker 的比例。
+* $\mathrm{dgs}$(detected given success):攻击**真成功**时被捕获的比例(优化/报告主用,避免把"诱饵扰乱致攻击失败"误算成检测)。
+* $\mathrm{ASR}_{\text{undetected}}$:危害达成且无 marker 触发的比例。
+* $\mathrm{ESR}(g)$(adaptive 规避成功率):达成 $g$ 且规避所有 marker 的比例。区分**有界 vs 开放基座**报告。
 
-**与 IFC 的区别。** 不在运行时传标签/判违规流;授权域划分只离线用一次。相对 AgentArmor(完整 DFG/PDG +
-类型系统 + 策略拦截)的根本差异:稀疏、policy-free、主动、有规避下界。
+---
+
+## 7. 边界与定位(诚实)
+
+**主结论(2026-W26)。** **在开放 agentic 基座里,deception(PLANT:outcome 检测 + 不可区分诱饵)> instrumentation(WRAP-in-band:可被读穿绕开)。** PLANT 的检测 $\perp$ 对手的执行环境;WRAP 的 in-band 检测依赖对手运行我们的代码,可被绕。
+
+**两个不可避免性来源即全集,不需要第三个 primitive。** ① 分不出真假(PLANT)② 没有别的路(WRAP)。任何"新行为"要么塌回这两者之一,要么靠基座强制(那是环境假设,不是新机制)。**授权/权限属 ①(PLANT)**,不是 WRAP(EXP-006)。**PLANT 是开放基座的通用承重墙**(数据、对象、授权);**WRAP 收窄为基座强制中介的特权/外部效果(MCP server 端)**,凡 shell 可复刻者归 PLANT。AuthBlur(speech-act)、CapFlow-over-CLI(开放 shell)是 WRAP 的界外/弱例。
+
+**优化器退场。** ε-子模/子集预算优化(旧命题 2)被实验证为 **no-op**:良性 FP **不随** $|M|$ 增长 → 预算永不 binding;且丢覆盖的子集选择对自适应对手**有害**。"优化"退化为 benign-fit 的"保留所有 FP-clean"。**论文贡献不是优化算法**,而是:① affordance 边界的**自动感知**;② **不可区分**的伪装(certify-gate);③ **commitment-touch** policy-free 检测;④ **基座级能力中介**。几何中点放置 / lure_radius / MCTS 一并退出主叙事。
+
+**与 IFC 的分界。** manufacture-then-observe:埋假物、看假物是否被提交触碰;运行时**不跟踪真实数据、不跑 source→sink 策略**。改写式外泄(诱饵假值被语义改写后不原样出现)是所有方法共有上限,留作 open problem;内容流溯源属 IFC(Fides/AgentArmor),只作**被动 baseline** 对照,不塞进主动框架。
+
+**已吸收的载体约束。** 不可见 Unicode / 哨兵串因 LLM 转发不保真而失效(canary TPR=0);可行 PLANT 载体是**结构化假标识符**(假 IBAN/email/ID),逐字搬运。诱饵命名**不得自描述**(honey/decoy/trap/sentinel),自描述既吓退 agent 又是混淆(TrustLift ASR 0.74→0.14)。
+
+**开放问题。** (O-FP) WRAP 的 $\delta_{\text{bdry}}$ 在满足前提的基座上单独实测;(O-fingerprint) certify-gate 的统计功效(当前 trials 偏少,需加 trials + 二项检验);(O-substrate) W2/W3 在真 MCP/AgentDojo 上的端到端复现。
