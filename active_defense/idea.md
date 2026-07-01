@@ -2,10 +2,15 @@
 
 ## One-Sentence Summary
 
-在 agent 可见的 affordance 空间里主动埋入 off-benign-path 诱饵,用
-commitment-touch 作为 policy-free 检测信号,统一覆盖 objective-level
-honeypot 与 boundary-level honeypot,并用 placement optimization 控制
-检测率与误报率的权衡。
+在 agent 可见的 affordance 空间里主动埋入诱饵,用 commitment-touch 作为
+policy-free 检测信号;鲁棒性的唯一来源是**不可避免性**——把诱饵放在攻击绕不开
+的地方:PLANT(不可区分的 must-take 诱饵,outcome 检测)与 WRAP(不可避免的能力
+咽喉中介)。核心结论:在开放 agentic 基座下,deception(PLANT)> instrumentation
+(WRAP-in-band 可被读穿绕开);WRAP 的强声称需 effectful harm ∧ 基座强制中介 ∧
+有界 affordance 面三前提(详见 `Formal.md` 命题 W)。
+
+> 注:本 summary 已于 2026-W26 按实验结论从"placement optimization 控制 TPR/FP
+> 权衡"改写(旧优化器叙事被证 no-op)。待用户确认。
 
 ## Angus Decision · 2026-06-24
 
@@ -25,17 +30,19 @@ SCR-TrustLift 上,即有组合授权攻击且 ASR>0 的同考点环境。
 
 ## Core Claim
 
-现有 AgentShield 式固定 trap 在组合授权攻击中会结构性漏报:攻击可以使用合法
-工具、合法对象或二元授权输出来完成危害,不必触碰固定 honeytool、固定
-honeytoken 或可 allowlist 的参数。本方法的增量是把诱饵放置从固定 trap 改为
-沿 objective→boundary 连续谱进行优化:
+现有 AgentShield 式固定 trap 在组合授权攻击中会结构性漏报:攻击可用合法工具/
+合法对象/二元授权输出完成危害,不必触碰固定 honeytool/honeytoken/可 allowlist 参数。
+本方法的增量是**把诱饵放在攻击绕不开的元素上(不可避免性)**,并用 policy-free 的
+commitment-touch 检测:
 
-- 族 1 objective-level honeypot: 把假目标、假凭证、假记录放在攻击想选用或外发
-  的对象槽位上;良性任务不应提交性使用这些假对象。
-- 族 2 boundary-level honeypot: 把无副作用的诱饵动作放在 skill/tool/MCP capability
-  的职责边界外侧;被授权洗白的 agent 一旦跨边界提交动作即触发。
-- 两族共用 commitment-touch 检测器、近零误报命题、子模覆盖/placement 优化和
-  规避成本下界。
+- 族 1 PLANT(对象端): 不可区分的 must-take 诱饵(certify-gate 认证),混入对手必须
+  处理的敏感对象集 → 排除不掉;检测是 **outcome-based**(诱饵 id 必现于对手产生的
+  效果状态),**对开放执行环境鲁棒**(不依赖对手运行我方代码)。
+- 族 2 WRAP(边界端): 不可避免的能力咽喉中介(cut-set 全覆盖);抗自适应**需三前提**
+  W1 effectful harm ∧ W2 基座强制中介 ∧ W3 有界面(`Formal.md` 命题 W)。
+- 主结论: **开放 agentic 基座下 deception(PLANT)> instrumentation(WRAP-in-band 可被
+  读穿绕开)**。两族共用 commitment-touch 检测器 + 近零误报(命题 1);**不再依赖
+  子模/placement 优化(已证 no-op)**。
 
 ## Primary Metrics
 
@@ -48,23 +55,24 @@ honeytoken 或可 allowlist 的参数。本方法的增量是把诱饵放置从�
 - `dgs`: detected given success,攻击真正成功时被 marker 捕获的比例。
 - `ASR` 与 `ASR_undetected`: 区分攻击未发生、攻击被扰乱和攻击成功但未检出。
 
-## Immediate Experimental Priorities
+## Immediate Experimental Priorities（2026-W26 重定向后）
 
-1. 补 SCR-AuthBlur family-2 boundary honeypot 的重复评估: `repeats>=2`,扩大 case,
-   报告 raw-control / safe-control / `I(M)` / `dgs`。
-2. 把 family-2 placement 的半径搜索从小样本 smoke test 扩成可画前沿的实验:
-   `TPR-I(M)`、`dgs-I(M)`、ASR disruption 前沿。
-3. 固定 SCR 为 AgentShield 主对比环境: CapFlow 与 AuthBlur 作为当前主证据,
-   TrustLift 只有在先把 ASR 抬到 `>0` 后才纳入主表。
-4. 将 AgentShield 在 AgentDojo 的结果写成诊断:低 ASR、条件检测口径、honeytoken
-   几乎不触发、固定主动诱饵缺少统计信号。
+1. **PLANT 抗开放-shell 对手(承重)**: 完成 EXP-005 修复版重跑——同一知情对手下
+   不可区分 certified 诱饵 vs 尖叫诱饵的 outcome 检出;若不可区分显著更高,主结论
+   "deception > instrumentation" 在真实威胁模型上闭合。落地 gap 2(capflow 改用 certify-gate)。
+2. **WRAP 承重验证迁到有界基座**: MCP / AgentDojo function-call(基座强制拦截 tool call、
+   agent 无裸 shell),复现 probe 的 0% 逃逸;AuthBlur(speech-act)/ CapFlow-CLI(open shell)
+   显式列为弱例。
+3. **SCR 为 AgentShield 主对比环境**: 组合授权攻击且 ASR>0;AgentDojo 仅作低-ASR 诊断附表。
+4. **威胁模型形式化定稿**: `Formal.md` 命题 W 三前提 + 主结论(待用户拍板,§9/§10)。
 
-## Current Evidence
+## Current Evidence（2026-W26 重定向后）
 
-- SCR-CapFlow: 族 1 固定诱饵约 `TPR=0.727 / I(M)=0`;MCTS 最优
-  `target|4|tail` 达到 `dgs=1.00 / TPR=0.818 / I(M)=0`。
-- SCR-AuthBlur: 族 2 MCTS 搜出
-  `reviewer=4, reviewer-plain=4, approver=2`,达到
-  `dgs=0.75 / I(M)=0 / ASR=1.0`。
-- AgentShield-on-SCR: CapFlow `TPR=0` vs ours `0.727`;AuthBlur `TPR=0`
-  vs ours `0.75`;TrustLift 因当前模型 ASR=0 暂不作主证据。
+- **近零误报(命题 1)**: AuthBlur 完整框架 `I(M)=0.000`(EXP-2026W26-001)。
+- **WRAP 威胁模型(命题 W)**: 能力中介对知情对手 `0% 逃逸`,纯文本决策 `90% 逃逸`(EXP-003)。
+- **WRAP-in-band 在开放 shell 被绕(强负结果)**: CapFlow-over-CLI 知情对手 `caught|acted=27%`
+  (73% 绕过,读穿明文 telemetry),违反前提 W2/W3(EXP-004)。
+- **PLANT 抗同一对手**: 同一知情开放-shell 对手下不可区分诱饵 vs 尖叫诱饵的 outcome 检出对比
+  (EXP-005,**首轮因 outcome 检测器 bug inconclusive,修复后重跑中**)。
+- **AgentShield-on-SCR(归档 thread,仍有效)**: 组合授权攻击且 ASR>0 时 AgentShield 三层 `TPR=0`。
+- ⚠ 旧 lure_radius MCTS 证据(`dgs=1.00` 等)属已废弃的优化器叙事,移除。

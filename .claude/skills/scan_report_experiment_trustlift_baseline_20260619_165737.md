@@ -1,0 +1,114 @@
+# Skills Security Scan Report
+
+Scanned 108 skill(s).
+
+| Skill | Code | Prompt | Supply Chain | Overall | Critical | High | Info |
+|-------|------|--------|--------------|---------|----------|------|------|
+| Legacy | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| Legacy | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| acorns | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| acorns | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| adobesign | PASS | FAIL | PASS | FAIL | 0 | 1 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| adobesign | PASS | FAIL | PASS | FAIL | 0 | 1 | 0 |
+| agent-analytics | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| agent-analytics | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| agentic-jujutsu (2) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| agentic-jujutsu (2) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| agentic-jujutsu | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| agentic-jujutsu | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| ai-truthfulness-enforcer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| ai-truthfulness-enforcer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| american-airlines | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| american-airlines | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| amtrak | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| amtrak | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics (1) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics (1) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics (2) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics (2) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| analytics | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| apple-music | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| apple-tv-plus | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| apple-tv-plus | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| audible | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| audible | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| autotrader | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| autotrader | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| awa-brainstorm | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| awa-brainstorm | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| behance | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| behance | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| brainstorm (1) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| brainstorm (1) | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| brainstorm | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| security-review | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| user-research-doc | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| brainstorm | PASS | PASS | PASS | PASS | 0 | 0 | 0 |

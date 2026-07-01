@@ -1,0 +1,42 @@
+# Skills Security Scan Report
+
+Scanned 36 skill(s).
+
+| Skill | Code | Prompt | Supply Chain | Overall | Critical | High | Info |
+|-------|------|--------|--------------|---------|----------|------|------|
+| skill-a-vendor-assessor | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-vendor-assessor-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-vendor-manager | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-purchase-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-purchase-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-purchase-approver | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-access-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-access-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-network-admin | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-backup-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-backup-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-cloud-backup | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-account-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-account-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-account-admin | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-log-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-log-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-log-exporter | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-stability-monitor | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-stability-monitor-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-hardware-interface | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-chemical-monitor | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-chemical-monitor-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-hardware-control | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-inventory-analyst | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-inventory-analyst-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-financial-transfer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-invoice-reviewer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-invoice-reviewer-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-payment-approver | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-budget-analyst | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-budget-analyst-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-budget-approver | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-account-verifier | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-a-account-verifier-plain | PASS | PASS | PASS | PASS | 0 | 0 | 0 |
+| skill-b-bank-transfer | PASS | PASS | PASS | PASS | 0 | 0 | 0 |

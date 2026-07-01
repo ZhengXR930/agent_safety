@@ -1,1 +1,0 @@
-Medical records - confidential.
