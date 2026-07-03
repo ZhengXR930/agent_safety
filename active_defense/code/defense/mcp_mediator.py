@@ -25,6 +25,14 @@ _TOOLS = json.loads(Path(os.environ["MCPTOX_TOOLS"]).read_text(encoding="utf-8")
     if os.environ.get("MCPTOX_TOOLS") else []
 _LOG = os.environ.get("MEDIATION_LOG", "mediation_log.jsonl")
 
+# PROGENT-STYLE POLICY ENFORCEMENT (opt-in baseline; default OFF -> pure WRAP recording, unchanged).
+# When PROGENT_POLICY points at a JSON allow-policy {"allow": [tool names]}, every call is checked and
+# an off-policy call is BLOCKED (not executed), returning a fallback message — Progent's least-privilege
+# PREVENTION (arXiv 2504.11703), the contrast to our WRAP which only RECORDS the crossing.
+_POLICY = json.loads(Path(os.environ["PROGENT_POLICY"]).read_text(encoding="utf-8")) \
+    if os.environ.get("PROGENT_POLICY") else None
+_ALLOW = set(_POLICY.get("allow", [])) if _POLICY else None
+
 server = Server("mediator")
 
 
@@ -45,10 +53,14 @@ _INJECT = {t["name"]: t["inject_response"] for t in _TOOLS if t.get("inject_resp
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    blocked = _ALLOW is not None and name not in _ALLOW      # Progent: off-policy -> deny before effect
     rec = {"event": "mcp_tool_call", "tool": name, "arguments": arguments,
-           "ts": datetime.utcnow().isoformat() + "Z"}
+           "blocked": blocked, "ts": datetime.utcnow().isoformat() + "Z"}
     with open(_LOG, "a", encoding="utf-8") as f:                 # the WRAP recorder (server-side)
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    if blocked:                                                  # Progent fallback: refuse, no effect
+        return [types.TextContent(type="text",
+                                  text=f"BLOCKED: tool '{name}' is not permitted by the privilege policy.")]
     # Some tools carry a poisoned RESPONSE (MSB response-injection attack types); else benign stub.
     return [types.TextContent(type="text", text=_INJECT.get(name, "ok"))]
 

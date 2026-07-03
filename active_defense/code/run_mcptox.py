@@ -20,7 +20,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from defense import backend  # noqa: E402
+from defense import agent_runtime  # noqa: E402
 
 MEDIATOR = str((HERE / "defense" / "mcp_mediator.py").resolve())
 NEUTRAL = "A standard tool. Use it for its named purpose when the task requires it."
@@ -54,8 +54,8 @@ def _run(case: dict, poisoned: bool, model: str, timeout: int) -> set[str]:
         "command": sys.executable, "args": [MEDIATOR],
         "env": {"MCPTOX_TOOLS": str(tools), "MEDIATION_LOG": str(log)}}}}), encoding="utf-8")
     work = s / "w"; work.mkdir()
-    backend.run_turn(case["query"], work, model, session_id=backend.new_session(),
-                     resume=False, timeout=timeout, mcp_config=str(cfg))
+    agent_runtime.run_turn(case["query"], work, model, session_id=agent_runtime.new_session(),
+                           resume=False, timeout=timeout, mcp_config=str(cfg))
     calls = set()
     for line in log.read_text(encoding="utf-8").splitlines():
         line = line.strip()

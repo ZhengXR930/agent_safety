@@ -20,7 +20,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from defense import backend  # noqa: E402
+from defense import agent_runtime  # noqa: E402
 
 MSB = (HERE / "../../benchmarks/external/MSB/data").resolve()
 MEDIATOR = str((HERE / "defense" / "mcp_mediator.py").resolve())
@@ -66,8 +66,8 @@ def _run(query: str, system: str, legit: str, inject: str | None, model: str, ti
         "env": {"MCPTOX_TOOLS": str(tools), "MEDIATION_LOG": str(log)}}}}), encoding="utf-8")
     work = s / "w"; work.mkdir()
     prompt = f"{system}\n\nTask: {query}\nUse the `{legit}` tool to do the work."
-    backend.run_turn(prompt, work, model, session_id=backend.new_session(),
-                     resume=False, timeout=timeout, mcp_config=str(cfg))
+    agent_runtime.run_turn(prompt, work, model, session_id=agent_runtime.new_session(),
+                           resume=False, timeout=timeout, mcp_config=str(cfg))
     calls = set()
     for line in log.read_text(encoding="utf-8").splitlines():
         if line.strip():

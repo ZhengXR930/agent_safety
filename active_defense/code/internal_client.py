@@ -46,6 +46,26 @@ DEEPSEEK_MODELS = {
 }
 
 
+# Models whose endpoint rejects an explicit `temperature` param.
+_NO_TEMP = {"kimi-k2.6", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
+
+
+def chat(client, model: str, prompt: str) -> str:
+    """One-shot chat completion (temperature 0 where supported).
+
+    The memory-backed defender roles (Camoufleur / Distinguisher) that need env KNOWLEDGE — not
+    filesystem EXPLORATION — answer through this instead of a `claude` subprocess cold-start."""
+    kw = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    if model not in _NO_TEMP:
+        kw["temperature"] = 0.0
+    try:
+        r = client.chat.completions.create(**kw)
+    except Exception:                                    # noqa: BLE001 — retry once without temperature
+        kw.pop("temperature", None)
+        r = client.chat.completions.create(**kw)
+    return (r.choices[0].message.content or "").strip()
+
+
 def read_config_key(name: str, root: Path | None = None) -> str | None:
     if os.environ.get(name):
         return os.environ[name]
