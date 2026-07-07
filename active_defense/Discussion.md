@@ -253,3 +253,62 @@ IFC 跟踪真实数据从 source 到 sink 的信息流。我们是 manufacture-t
 4. 自适应攻击未实测：Ours 的自适应鲁棒是结构论证（PLANT 认证不可分辨、WRAP 无 shell 不可绕过），可用 `--adversary` 补实测。
 
 
+---
+
+## Thread #3: Benchmark × Baseline 选型矩阵（tool / MCP / skill）
+
+> 更新 2026-07-07。
+
+### 表 1 · Benchmark
+对于三种unit各包含两个常用的benchmark
+| # | benchmark | 底座 | 注入向量 | 本机可跑 | 状态 |
+|---|---|---|---|---|---|
+| B1 | AgentDojo | tool | 工具输出 IPI | ✅ | 已跑 |
+| B2 | InjecAgent | tool | 工具返回 dh/ds | ✅ | 已跑(smoke) |
+| B3 | MCPTox | MCP | 投毒工具描述 | ✅ | 已跑 |
+| B4 | MSB | MCP | MCP pipeline | ✅ | 已跑 |
+| B5 | AgentTrap | skill | 恶意 skill 代码 | ⚠️ 需 Docker | 阻塞 |
+| B6 | SCR (AuthBlur/TrustLift/CapFlow, ours) | skill | 伪授权 / 能力误用 | ✅ | 已跑 |
+
+淘汰（不合威胁模型）：ASB（仅 OPI 合，余 DPI/后门/记忆）· tau-bench / ToolEmu（reliability / 欠约束，无注入物）· AgentHarm（用户直接求害）· TaintBench（安卓恶意软件 taint，非 agent）。
+
+### 表 2 · Baseline
+
+| # | baseline | 类型 / 轴 | 代码 |
+|---|---|---|---|
+| D1 | Progent | least-privilege 策略 | ✅ |
+| D2 | CaMeL | 数据/控制流（flow 轴） | ✅ |
+| D3 | MELON | masked re-execution | ✅ |
+| D4 | 4 轻量（DeBERTa / repeat / spotlight / tool-filter） | 检测 / 提示加固 | ✅ 自带 |
+| D5 | MCP-Guard | MCP 多阶代理 | ✅ 仓库 |
+| D6 | MindGuard | MCP 投毒检测 + 溯源 | 待核 |
+| D7 | SkillScope | skill 最小权限 | 待核 |
+| D8 | 内容防御族(8) | 内容过滤 | 部分 |
+| D9 | FIDES（可选） | IFC 轴 | 待核 |
+| D10 | AIRGuard（竞品/可选） | runtime authority | 待核 |
+
+### 表 3 · Benchmark ↔ Baseline 对应
+
+| benchmark | SOTA baseline |
+|---|---|
+| B1 AgentDojo | D1 Progent · D2 CaMeL · D3 MELON · D4 4 轻量（· D9 FIDES） |
+| B2 InjecAgent | D3 MELON(需移植) · sandwich · instructional-prevention · delimiter · tool-filter |
+| B3 MCPTox | D5 MCP-Guard · D6 MindGuard |
+| B4 MSB | D5 MCP-Guard · D6 MindGuard |
+| B5 AgentTrap | 自带(spotlight/delimit/isolate) · D7 SkillScope |
+| B6 SCR | D8 内容防御族 · D1 Progent |
+
+### 表 4 · 每个 benchmark unit 的 adaptive attack（现有 SOTA，非自创）
+
+| benchmark | adaptive attack SOTA（已发表 / benchmark 自带） | 压测原语 |
+|---|---|---|
+| B1 AgentDojo | important_instructions · tool_knowledge · Adaptive-Max（自带，+10%）· GCG/AutoDAN （Zhan 2503.00061）· pre-authorized 伪装（2606.26479）· 三阶级联（2510.05244） | WRAP 任务合同 · PLANT 不可区分 |
+| B2 InjecAgent | enhanced「hacking prompt IMPORTANT!!!」（自带，ASR×2）· IterInject 反馈迭代优化（2605.24659）· GCG/AutoDAN（2503.00061） | WRAP off-scope |
+| B3 MCPTox | MCP-ITP 自适应隐式投毒（黑盒优化 + 规避检测，2601.07395） | WRAP 参数级 / 咽喉 |
+| B4 MSB | MCP-ITP | WRAP 咽喉完整性 |
+| B5 AgentTrap | 自带 10 攻击法：隐写/编码 · skill-instruction 投毒 · MCP/OAuth 滥用 · hidden routing · helper-code 副作用 · persistence… | PLANT-ACCESS · WRAP |
+| B6 SCR-AuthBlur/TrustLift | pre-authorized 伪装（2606.26479）· GCG/AutoDAN（2503.00061）· SCR --adversary | PLANT-basis |
+| B6 SCR-CapFlow | in-band 剥离 + 裸 shell 复刻（SCR --adversary, EXP-2026W26-004）· GCG/AutoDAN（2503.00061） | PLANT-outcome |
+
+> 跨 benchmark 的通用自适应破防方法论：**Zhan et al. 2503.00061**（NAACL'25，GCG/AutoDAN 破 8 个 IPI 防御）· **The Attacker Moves Second 2510.09023**（梯度/RL/随机搜索破 12 防御 >90%）· 评估协议 2606.26479 §10。
+> 相关竞品（deception 路线，须跟踪）：**AgentShield 2605.11026**（Deception-based Compromise Detection）。
