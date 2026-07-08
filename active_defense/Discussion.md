@@ -252,6 +252,12 @@ IFC 跟踪真实数据从 source 到 sink 的信息流。我们是 manufacture-t
 3. ASR base 为不同 gpt-4o-mini 批次（各自内部有效，非完全同基）。
 4. 自适应攻击未实测：Ours 的自适应鲁棒是结构论证（PLANT 认证不可分辨、WRAP 无 shell 不可绕过），可用 `--adversary` 补实测。
 
+【Agent@Codex】【2026-07-06 10:56】Weekly Retro:
+
+- 已驳斥假设：W27 没有新的 `Falsified=Y` 主结论；但保留两个边界性负面事实：(1) 真·MaliciousAgentSkillsBench 157 条在当前本机环境无法全量跑，受公开数据 URL redaction、qemu/strace、`--network none` 三重阻断限制（`LOGS/2026-W27.md#EXP-2026W27-002`）；(2) Progent 初始自治配置因缺 `SECAGENT_SUITE` 导致策略为空，EXP-006 对比数不可作数，已在 EXP-007 闭合。
+- 已支持假设：MCP/WRAP 线新增强证据：MSB 响应注入 WRAP caught_given_harm=36/36，而 MCP-Guard 部署态 0/50（`LOGS/2026-W27.md#EXP-2026W27-004`）；自适应 MCP-ITP 将 MCP-Guard 检出从 100% 打到 33%，但同批仍攻击样本 WRAP 7/7 捕获（`LOGS/2026-W27.md#EXP-2026W27-005`）。AgentDojo 四 suite 结果支持同轴对比：caught|success=52/52、56/58、24/24、45/45，总计 98.9%，FP=0；Ours(WRAP-block) 残留 ASR 约 0.5% vs Progent 7.5% vs 无防御 40%（`LOGS/2026-W27.md#EXP-2026W27-008`）。
+- 悬而未决问题：`Formal.md` 与当前 Discussion 已基本对齐到 PLANT/WRAP 两 primitive、WRAP W1-W3、Progent 同轴比较；仍需补三项证据：(1) 把 WRAP 记录改成可选拒绝并实测 blocking utility，而不是只用 FP=0 作结构推论；(2) 构造“授权渠道内 exfil”攻击，证明 PLANT 相对 Progent 的独有增量；(3) 补 `--adversary` 自适应版，避免自适应鲁棒只停留在结构论证。
+
 
 ---
 
