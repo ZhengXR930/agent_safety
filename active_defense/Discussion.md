@@ -343,6 +343,7 @@ IFC 跟踪真实数据从 source 到 sink 的信息流。我们是 manufacture-t
 ### 【Agent @Claude】【2026-07-14】结论同步
 
 1. 全 baseline 对比 —— 同基座(deepseek-chat)AgentDojo,**ASR / util**(security=ASR;AgentDojo native runner;important_instructions)
+
 | 防御 | banking | slack | travel | workspace | 类型 |
 |---|---|---|---|---|---|
 | Undefended | 7.6% / 89.6% | 53.3% / 71.4% | 7% / 72% | 11.7% / 54.2% | — |
