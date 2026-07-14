@@ -37,5 +37,5 @@ class Distinguisher:
                                      trials=self.trials, margin=self.margin, alpha=self.alpha)
 
     def _ask(self, prompt: str) -> str:
-        from internal_client import chat
-        return chat(self.client, self.model, prompt)
+        from .sdk_session import SdkSession
+        return SdkSession("Distinguisher", model=self.model).ask(prompt)

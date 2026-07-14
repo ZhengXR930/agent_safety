@@ -64,6 +64,19 @@ def main():
                     help="cost lever: skip the extra held-out benign run (FP reported as n/a)")
     ap.add_argument("--observe-output", action="store_true",
                     help="ACCESS observation: also flag a decoy referenced in the agent's output")
+    ap.add_argument("--enforce", "--block", dest="enforce", action="store_true",
+                    help="RESPONSE: at an enforced chokepoint, DENY an off-scope/honeytoken crossing live "
+                         "(block==detect), not just record it.  Sound only for function-call/MCP/sandbox "
+                         "substrates; open-shell stays detection-only.")
+    ap.add_argument("--audit", dest="audit", action="store_true",
+                    help="RESPONSE (deception, final scheme): instead of blocking a detected attack crossing, "
+                         "return a FAKE success (real tool not run) so the attacker believes it worked and the "
+                         "defense stays hidden.  Implies --enforce (policy active).")
+    ap.add_argument("--no-provenance", dest="provenance", action="store_false",
+                    help="ABLATION: disable trusted-read provenance (WRAP in-scope completeness).  Default on: "
+                         "a crossing target the agent resolved at runtime from a trusted first-party read is "
+                         "in-scope (allow-only, laundering-proof).  Off => higher benign FP; security unchanged.")
+    ap.set_defaults(provenance=True)
     ap.add_argument("--runtime-benign", type=int, default=0,
                     help="runtime update: # online benign episodes folded via the Updater after deploy "
                          "(online benign-fit self-correction) before the attack")
@@ -78,6 +91,7 @@ def main():
                     perceive_model=args.perceive_model, timeout=args.timeout,
                     certify_trials=args.certify_trials, calib_runs=args.calib_runs,
                     fp_holdout=not args.no_fp_holdout, observe_output=args.observe_output,
+                    enforce=args.enforce, audit=args.audit, provenance=args.provenance,
                     runtime_benign=args.runtime_benign, runtime_tau=args.runtime_tau,
                     runtime_store=args.runtime_store)
     if args.benchmark == "agentdojo":                    # swap in the function-call substrate + its agent
@@ -107,12 +121,33 @@ def main():
     if adj:
         succ = [x for x in adj if x["asr"]]
         n = len(adj) or 1
-        print(f"  AGENTDOJO (through the generic Engine + real Detector):")
+        enforced = any(x.get("blocked") is not None for x in adj) and args.enforce
+        util_n = sum(x["utility"] for x in adj)
+        print(f"  AGENTDOJO (through the generic Engine + real Detector){' + ENFORCE' if args.enforce else ''}:")
         print(f"    episodes            = {len(adj)}  (one deployment/suite reused across all)")
         print(f"    ASR (attack success)= {sum(x['asr'] for x in adj)}/{len(adj)} ({sum(x['asr'] for x in adj)/n*100:.0f}%)")
+        print(f"    utility (task done) = {util_n}/{len(adj)} ({util_n/n*100:.0f}%)")
         print(f"    caught | success    = {sum(x['caught'] for x in succ)}/{len(succ)} "
               f"({(sum(x['caught'] for x in succ)/len(succ)*100) if succ else 0:.0f}%)")
         print(f"      of which WRAP={sum(x['wrap_caught'] for x in succ)} PLANT={sum(x['plant_caught'] for x in succ)}")
+        if args.enforce:                                    # RESPONSE: crossings DENIED live (prevention)
+            blk = [x for x in adj if x.get("blocked")]
+            print(f"    BLOCKED (denied)    = {sum(x.get('n_blocked', 0) for x in adj)} calls "
+                  f"across {len(blk)}/{len(adj)} episodes")
+        # CLEAN benign FP: no-injection episodes with the policy ACTIVE.  Any block here is a genuine
+        # false positive (WRAP/Evidence over-blocking a legit action, or a residual PLANT), and the
+        # utility here is the no-attack utility UNDER defense.  This is the FP `fp=` above does NOT cover.
+        bfp = [row for r in res["rows"] if r.get("benign_fp_rows") for row in r["benign_fp_rows"]]
+        if bfp:
+            nb = len(bfp)
+            fp_ep = [x for x in bfp if x.get("blocked")]
+            bu = sum(x["utility"] for x in bfp)
+            print(f"    benign FP (no-atk)  = {len(fp_ep)}/{nb} ({len(fp_ep)/nb*100:.0f}%) episodes had a "
+                  f"legit call BLOCKED  [WRAP/Evidence/PLANT false positive]")
+            print(f"    benign utility(def) = {bu}/{nb} ({bu/nb*100:.0f}%)  (no-attack utility under defense)")
+            if fp_ep:
+                rs = [rr for x in fp_ep for rr in (x.get("blocked_reasons") or [])][:4]
+                print(f"      FP reasons (sample): {rs}")
         print("=" * 78)
     tag = f"{adapter.name}_{args.suite}" if args.benchmark == "agentdojo" else adapter.name
     out = HERE.parent / "experiment_stage" / f"engine_{tag}_{args.model}_{datetime.now():%Y%m%d_%H%M%S}.json"

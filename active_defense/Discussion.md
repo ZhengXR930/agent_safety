@@ -276,45 +276,173 @@ IFC 跟踪真实数据从 source 到 sink 的信息流。我们是 manufacture-t
 | B5 | AgentTrap | skill | 恶意 skill 代码 | ⚠️ 需 Docker | 阻塞 |
 | B6 | SCR (AuthBlur/TrustLift/CapFlow, ours) | skill | 伪授权 / 能力误用 | ✅ | 已跑 |
 
-淘汰（不合威胁模型）：ASB（仅 OPI 合，余 DPI/后门/记忆）· tau-bench / ToolEmu（reliability / 欠约束，无注入物）· AgentHarm（用户直接求害）· TaintBench（安卓恶意软件 taint，非 agent）。
-
 ### 表 2 · Baseline
 
-| # | baseline | 类型 / 轴 | 代码 |
+| # | baseline | 类型 / 轴 | 代码 / 状态 |
 |---|---|---|---|
-| D1 | Progent | least-privilege 策略 | ✅ |
-| D2 | CaMeL | 数据/控制流（flow 轴） | ✅ |
-| D3 | MELON | masked re-execution | ✅ |
-| D4 | 4 轻量（DeBERTa / repeat / spotlight / tool-filter） | 检测 / 提示加固 | ✅ 自带 |
-| D5 | MCP-Guard | MCP 多阶代理 | ✅ 仓库 |
-| D6 | MindGuard | MCP 投毒检测 + 溯源 | 待核 |
-| D7 | SkillScope | skill 最小权限 | 待核 |
-| D8 | 内容防御族(8) | 内容过滤 | 部分 |
-| D9 | FIDES（可选） | IFC 轴 | 待核 |
-| D10 | AIRGuard（竞品/可选） | runtime authority | 待核 |
+| D1 | Progent | least-privilege 策略 | ✅ 已跑 |
+| D2 | CaMeL | 数据/控制流（flow 轴，解释器式） | ✅ 已跑(deepseek) |
+| D3 | FIDES | IFC（flow 轴，标签式） | notebook 含核心可 lift，需桥接（非 drop-in） |
+| D4 | MELON | masked re-execution（检测轴） | ✅ 有代码，drop-in AgentDojo |
+| D5 | 内容防御族(8)：spotlighting · sandwich · instructional-prevention · data-marking · paraphrasing · retokenization · PI-detector(DeBERTa/PromptGuard) · perplexity | 内容轴（提示 / 内容级） | AgentDojo 自带其中 DeBERTa/spotlight/repeat(sandwich)；余需实现 |
+| D6 | tool-filter | 执行级轻量最小权限（LLM 预筛工具集） | ✅ AgentDojo 自带 |
+| D7 | MCP-Guard | MCP 多阶代理 | ✅ 仓库 |
+| D8 | MindGuard | MCP 投毒检测 + 溯源 | 待核 |
+| D9 | SkillScope | skill 最小权限 | 待核 |
+| D10 | AIRGuard | runtime authority（**授权轴 baseline**，亦最近竞品；reference-monitor） | ✅ guard 核心已验证可跑(Docker-free，client 可注入)；自带 benchmark(DTAP-150/AgentTrap)需 Docker；桥到我方 benchmark 中等 |
+
 
 ### 表 3 · Benchmark ↔ Baseline 对应
 
 | benchmark | SOTA baseline |
 |---|---|
-| B1 AgentDojo | D1 Progent · D2 CaMeL · D3 MELON · D4 4 轻量（· D9 FIDES） |
-| B2 InjecAgent | D3 MELON(需移植) · sandwich · instructional-prevention · delimiter · tool-filter |
-| B3 MCPTox | D5 MCP-Guard · D6 MindGuard |
-| B4 MSB | D5 MCP-Guard · D6 MindGuard |
-| B5 AgentTrap | 自带(spotlight/delimit/isolate) · D7 SkillScope |
-| B6 SCR | D8 内容防御族 · D1 Progent |
+| B1 AgentDojo | D1 Progent · D2 CaMeL · D3 FIDES · D4 MELON · D5 内容防御族(自带 DeBERTa/spotlight/repeat) · D6 tool-filter |
+| B2 InjecAgent | D4 MELON(需移植) · D5 内容防御族子集(sandwich/instructional/delimiter) · D6 tool-filter |
+| B3 MCPTox | D7 MCP-Guard · D8 MindGuard |
+| B4 MSB | D7 MCP-Guard · D8 MindGuard |
+| B5 AgentTrap | 自带(spotlight/delimit/isolate) · D9 SkillScope · D10 AIRGuard(在 AgentTrap 发表：36.3%→5.5%) |
+| B6 SCR | D5 内容防御族 · D1 Progent · D10 AIRGuard(授权轴头对头) |
 
 ### 表 4 · 每个 benchmark unit 的 adaptive attack（现有 SOTA，非自创）
 
 | benchmark | adaptive attack SOTA（已发表 / benchmark 自带） | 压测原语 |
 |---|---|---|
-| B1 AgentDojo | important_instructions · tool_knowledge · Adaptive-Max（自带，+10%）· GCG/AutoDAN （Zhan 2503.00061）· pre-authorized 伪装（2606.26479）· 三阶级联（2510.05244） | WRAP 任务合同 · PLANT 不可区分 |
-| B2 InjecAgent | enhanced「hacking prompt IMPORTANT!!!」（自带，ASR×2）· IterInject 反馈迭代优化（2605.24659）· GCG/AutoDAN（2503.00061） | WRAP off-scope |
-| B3 MCPTox | MCP-ITP 自适应隐式投毒（黑盒优化 + 规避检测，2601.07395） | WRAP 参数级 / 咽喉 |
-| B4 MSB | MCP-ITP | WRAP 咽喉完整性 |
-| B5 AgentTrap | 自带 10 攻击法：隐写/编码 · skill-instruction 投毒 · MCP/OAuth 滥用 · hidden routing · helper-code 副作用 · persistence… | PLANT-ACCESS · WRAP |
-| B6 SCR-AuthBlur/TrustLift | pre-authorized 伪装（2606.26479）· GCG/AutoDAN（2503.00061）· SCR --adversary | PLANT-basis |
-| B6 SCR-CapFlow | in-band 剥离 + 裸 shell 复刻（SCR --adversary, EXP-2026W26-004）· GCG/AutoDAN（2503.00061） | PLANT-outcome |
+| B1 AgentDojo | important_instructions · tool_knowledge · Adaptive-Max（自带）· **AutoDojo 黑盒自适应（2606.15057；静态归零仍恢复 28–64%）** · GCG/AutoDAN（Zhan 2503.00061）· **TAP>GCG 自动化（2606.10525）** · pre-authorized 伪装（2606.26479）· 三阶级联（2510.05244） | WRAP 任务合同 · PLANT 不可区分 |
+| B2 InjecAgent | enhanced「IMPORTANT!!!」（自带，ASR×2）· IterInject（2605.24659）· GCG/AutoDAN（2503.00061）· **TAP（2606.10525）** | WRAP off-scope |
+| B3 MCPTox | P1/P2/P3 三范式（自带）· MCP-ITP 黑盒优化 + 规避检测（2601.07395）· **WebMCP 运行时工具面 / 会话中注入（2606.06387）** · **ToolHijacker 工具选择攻击** | WRAP 参数级 / 咽喉 · **perceive-once 时效性** |
+| B4 MSB | 12 类攻击（name collision · desc injection · out-of-scope param · impersonation · false-error · tool-transfer · retrieval injection…，自带）· MCP-ITP（2601.07395）· WebMCP（2606.06387） | WRAP 咽喉完整性 |
+| B5 AgentTrap | 自带 10 攻击法（隐写/编码 · skill-instruction 投毒 · MCP/OAuth 滥用 · hidden routing · helper-code 副作用…）· **SkillJect 双通道闭环（2602.14211）** · **POISE 位置感知隐蔽注入（2606.07943）** | PLANT-ACCESS · WRAP |
+| B6 SCR-AuthBlur/TrustLift | pre-authorized 伪装（2606.26479）· **CoT Forgery / role confusion（2603.12277）** · GCG/AutoDAN（2503.00061）· SCR --adversary | PLANT-basis |
+| B6 SCR-CapFlow | in-band 剥离 + 裸 shell 复刻（SCR --adversary, EXP-2026W26-004）· **POISE 式 body 注入（2606.07943）** · GCG/AutoDAN | PLANT-outcome |
+| 跨 benchmark | **Agent Data Injection（JSON/DOM delimiter，攻击结构化数据边界＝collections_util 的地盘）** | PLANT 载体 |
 
-> 跨 benchmark 的通用自适应破防方法论：**Zhan et al. 2503.00061**（NAACL'25，GCG/AutoDAN 破 8 个 IPI 防御）· **The Attacker Moves Second 2510.09023**（梯度/RL/随机搜索破 12 防御 >90%）· 评估协议 2606.26479 §10。
-> 相关竞品（deception 路线，须跟踪）：**AgentShield 2605.11026**（Deception-based Compromise Detection）。
+> 通用自适应方法论：**Zhan 2503.00061**（GCG/AutoDAN 破 8 IPI 防御）· **The Attacker Moves Second 2510.09023**（破 12 防御 >90%）· 评估协议 **2606.26479 §10**。
+> deception 竞品（须跟踪）：**AgentShield 2605.11026**。
+> 自适应 PI **防御**（可当额外 baseline）：RETA 2606.15441 · RouteGuard 2604.22888 · MindGuard 2508.20412 · Defenses&Enablers 2606.01567。
+
+### 表 4b · 三层 adaptive attack 评估协议（呼应 2606.26479 §10）
+
+> 不做单纯 prompt string mutation，而是压 agent **能力面**上的自适应对手，覆盖 tool / MCP / skill / prompt 四种输入-执行边界。
+
+| 层 | 基础攻击池 | 自适应 / 优化 | 边界攻击 |
+|---|---|---|---|
+| **Tool/MCP** | MSB 12 类 · MCPTox P1/P2/P3 | MCP-ITP（detector-aware 黑盒优化 metadata/param/schema） | WebMCP 运行时工具面 · ToolHijacker 选择层 |
+| **Skill** | SkillInject · AgentTrap 10 法 | SkillJect 闭环 · reframing / translation / LLM-search | POISE 位置感知隐蔽（成功指标须含"user task 仍完成"） |
+| **Prompt/context** | AgentDojo / InjecAgent IPI | AutoDojo · TAP / GCG / AutoDAN | role confusion(CoT Forgery) · Agent Data Injection(JSON/DOM delimiter) |
+
+> 两个方案层面 open question：① **WebMCP mid-session 工具注入** 挑战我们"perceive-once → 复用部署"的假设（要么"工具面变更即重感知"，要么明确标界外）；② **Agent Data Injection** 攻击我们埋 marker 的结构化数据本身（须验证 delimiter 注入不挤掉 / 不伪装诱饵）。
+
+---
+
+## Thread #4: 与 CaMeL 的对比、我们的差结果、改进方案(anomaly→specification + deception)
+
+**状态: Open** · **DISC-2026W29-001**
+
+> 目的:同步本周 CaMeL 同基座对比 + 诚实 benign-FP 测量的结论。**本 thread 更正 Thread #2 的乐观叙事**:Thread #2 的 "FP=0 / 无 util 税 / 优于 Progent" 建立在**旧 FP 测量**(只测 withhold 后剩余诱饵)之上;加入干净 benign-FP 测量后,结论显著变化(见 §3)。数字为 deepseek 统一基座 AgentDojo(待回填 `LOGS/2026-W29.md`)。
+
+### 【Agent @Claude】【2026-07-14】结论同步
+
+1. 全 baseline 对比 —— 同基座(deepseek-chat)AgentDojo,**ASR / util**(security=ASR;AgentDojo native runner;important_instructions)
+| 防御 | banking | slack | travel | workspace | 类型 |
+|---|---|---|---|---|---|
+| Undefended | 7.6% / 89.6% | 53.3% / 71.4% | 7% / 72% | 11.7% / 54.2% | — |
+| repeat_prompt | 4.2% / 86.8% | 34.3% / 72.4% | 9% / 70% | 9.2% / 66.7% | prompt |
+| spotlighting | 2.8% / 91.0% | 39.1% / 71.4% | 10% / 67% | 12.9% / 65.4% | prompt |
+| pi_detector | 0% / 34.7% | 2.9% / 21.0% | 0% / **2%** | 6.7% / 32.5% | **分类器** |
+| tool_filter | 0% / 31.3% | 0.9% / **4.8%** | 0% / **0%** | 0.4% / 24.2% | **分类器/过滤** |
+| Progent | 0% / 37.5% | 0% / 0%(退化) | 0% / 56% | 0% / 27.9% | least-privilege 策略 |
+| CaMeL | 0% / 58% | 0% / 63% | 8% / 56% | 0% / **72%** | IFC/CFI |
+| **Ours(block)** | 1% / 53% | 8% / 46% | 0% / 60% | 0% / 32% | 我们 |
+
+
+整体来看，各类方法形成了比较明显的特点。
+
+Prompt-based 方法（Repeat Prompt、Spotlighting） 能较好保持任务完成率，但安全性较弱，ASR 仍然较高。
+分类器方法（PI Detector、Tool Filter） 基本可以将 ASR 压到接近 0，但误拦截严重，Utility 大幅下降。
+Progent 同样能够保证较低 ASR，但在多个 benchmark 上存在明显的 utility 损失。
+CaMeL 是目前表现最好的方法，在安全性和 utility 之间取得了最佳平衡。
+我们的方法 能够保持较低 ASR，同时 utility 明显高于分类器方案，但整体仍落后于 CaMeL。
+
+因此，目前实验支持的结论应当是：
+
+我们的方法已经优于传统 prompt-based、防御分类器和 least-privilege 类方法，但与 CaMeL 相比仍存在明显差距，后者是当前最强 baseline。
+
+2. 我们与 CaMeL 的主要差距并不是调参问题
+
+进一步分析发现，两者最大的差距来自设计理念，而不是参数设置。
+
+CaMeL 本质上采用的是 control-flow integrity（CFI） 思路。规划阶段只能访问可信任务，因此攻击内容无法进入 agent 的推理流程，也不会影响后续规划，因此即使存在攻击，agent 仍然能够正常完成用户任务。
+
+我们的方案则属于 drop-in mediator。攻击内容仍然会进入 agent 的上下文，虽然最终危险操作能够在 chokepoint 被拦截，但 agent 已经可能因为受到攻击内容影响而偏离原始任务，例如错误规划、额外推理或浪费执行轮数。这些偏离即使最终没有产生危险操作，也会降低 utility。
+
+这种差距随着任务长度增加会更加明显，因此在 Workspace benchmark 上表现最差。
+
+这说明目前观察到的 utility 损失主要来自架构本身，而不是简单增加规则或调整阈值能够解决的问题。
+
+3. 我们之前的 False Positive 评估存在问题
+
+重新检查实验后，我们发现之前报告的 FP≈0 并不能真实反映误报率。
+
+此前统计的是攻击场景下剩余诱饵是否被拦截，而不是正常任务是否会被错误阻断。
+
+重新定义 FP 后，我们在纯 benign 数据上进行了测试，结果发现：
+
+Slack benchmark 的 benign FP 达到 100%。
+
+进一步分析发现主要原因有两类：
+
+字符串启发式规则导致大量误匹配，例如频道名、URL 或普通单词被误认为攻击标记；
+即使去除这些启发式后，误报率仍然较高，说明问题不仅来自实现，而来自检测策略本身。
+
+因此，我们此前关于"近零误报"的结论需要修正，并重新评估所有实验。
+
+4. 问题本质：当前 WRAP 仍然属于 Anomaly Detection
+
+结合实验，我们重新审视了整个设计。
+
+目前 WRAP 的 benign-fit 本质上仍然是在判断
+
+"当前行为是否像历史正常行为。"
+
+这实际上对应传统 IDS 中的 Anomaly Detection。
+
+这一范式具有两个天然缺陷：
+
+正常行为分布很难完整建模，因此容易产生误报；
+攻击者可以通过模仿正常行为绕过检测。
+
+而 CaMeL 更接近 Specification-based 防御。
+
+它根据用户任务预先定义允许执行的行为，只要行为超出任务规格就拒绝，因此天然具有更低的误报率。
+
+进一步分析发现，还存在一类无法完全自动解决的问题：
+
+例如：
+
+"邀请 Dora，并去她的网站寻找邮箱。"
+
+这里最终发送邮件的目标邮箱来自不可信网页。
+
+从结构上看，它与攻击者诱导 agent 向恶意邮箱发送邮件几乎完全一致。任何只依赖行为结构的机制都无法区分这两种情况，因此最终仍需要用户确认。
+
+这属于自动防御不可避免的能力边界，而不仅仅是我们方法的问题。
+
+5. 下一步改进方向
+
+目前更合理的方向不是继续增强 anomaly detection，而是重新调整整个设计。
+
+具体来说：
+
+WRAP 从 anomaly detection 转向 specification-based authorization，所有操作均由任务规格显式授权，而不是依赖行为相似性判断。
+PLANT 强化 deception 设计，使诱饵具备形式化可分析的安全保证，而不是简单 marker。
+将 benign-fit 降级为辅助检查模块，仅用于发现规格缺失，而不再直接参与授权决策。
+
+这样可以保持我们现有主动防御框架，同时与 CaMeL 的 IFC/CFI 路线形成明确区别。
+
+6. 后续工作
+
+下一阶段建议完成三项工作：
+
+将 WRAP 重构为 specification-based 授权机制，并重新完善形式化分析。
+在统一评测框架下重新运行所有 baseline，保证公平比较。
+增加边界案例（如 "Dora 邮箱"）实验，对比 CaMeL、Progent 与我们的方法在真正困难场景下的行为差异。

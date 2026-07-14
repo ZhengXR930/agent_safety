@@ -143,9 +143,9 @@ class TaskAllowanceExtractor:
         return TaskContract(steps=[])
 
     def _ask_json(self, prompt: str) -> dict:
-        from internal_client import chat
+        from .sdk_session import SdkSession
         import re
-        txt = chat(self.client, self.model, prompt)
+        txt = SdkSession("TaskAllowance", model=self.model).ask(prompt)
         m = re.search(r"```(?:json)?\s*(.*?)```", txt, re.S)
         if m:
             txt = m.group(1)

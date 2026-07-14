@@ -41,8 +41,22 @@ class ExecutionBackend:
     #     Default = a claude-CLI session that EXPLORES the work dir (file benchmarks).  A structured env
     #     (AgentDojo) overrides with an API call carrying the surface as CONTEXT (knowledge, not exploration).
     def survey_session(self, work, engine):
-        from .subagent import Session
-        return Session("Surveyor", work, engine.perceive_model, timeout=engine.timeout)
+        # In-process OpenAI-Agents-SDK agent on DeepSeek (file tools -> explores `work` itself), replacing
+        # the coco CLI subprocess: same agent capability, NO cold-start (feasible for every role/hot loop).
+        from .sdk_session import SdkSession
+        return SdkSession("Surveyor", cwd=work, model=engine.perceive_model, timeout=engine.timeout)
+
+    # 1c. survey prompt suffix: extra instructions APPENDED to the ONE Surveyor ask, so a backend can fold
+    #     additional structured perception into the SAME single ask (no follow-up ask -> no persona/context
+    #     contamination, no session resume).  Default = "" (generic _SURVEY unchanged).
+    def survey_prompt_suffix(self) -> str:
+        return ""
+
+    # 1d. post-survey hook: consumes the Surveyor's `data` (which, with a suffix, carries the extra fields)
+    #     right after the survey ask while `work` is alive.  Lets a backend extract folded perception —
+    #     e.g. AgentDojo reads its tool classification straight from `data`.  Default = no-op.
+    def post_survey(self, session, data, work) -> None:
+        return None
 
     # 2. per-unit enrich dispatch (default: the unit's BackendAdapter reads its carrier under `work`).
     def enrich_unit(self, unit, work: Path, prior_benign, conventions: str) -> dict:

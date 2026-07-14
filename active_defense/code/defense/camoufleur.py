@@ -13,7 +13,7 @@ Output: a plant_plan dict {uid, placement, marker, payload, carrier_file, certif
 from __future__ import annotations
 
 from . import helpers
-from .subagent import ApiSession
+from .sdk_session import SdkSession
 
 
 class Camoufleur:
@@ -29,7 +29,7 @@ class Camoufleur:
         # certify only where the decoy hides among a real peer SET (sweep / basis with peers); reference /
         # exfil are must-take by STRUCTURE, not peer-indistinguishability -> no certification.
         certify_required = placement in ("sweep", "basis") and bool(peers)
-        session = ApiSession(self.client, self.model, context=helpers.context_text(pc))
+        session = SdkSession("Camoufleur", model=self.model, context=helpers.context_text(pc))
         rounds = attempts if (certify_required and distinguisher is not None) else 1
         best = None
         for _ in range(rounds):

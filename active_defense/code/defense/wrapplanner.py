@@ -103,8 +103,8 @@ class WrapPlanner:
             return default
 
     def _ask_json(self, prompt: str) -> dict:
-        from internal_client import chat
-        txt = chat(self.client, self.model, prompt)
+        from .sdk_session import SdkSession
+        txt = SdkSession("WrapPlanner", model=self.model).ask(prompt)
         m = re.search(r"```(?:json)?\s*(.*?)```", txt, re.S)
         if m:
             txt = m.group(1)
