@@ -156,6 +156,39 @@ $$
 
 若 $s$ 是 hard WRAP 且该 scope 已有 calibrated benign profile，则 off-scope crossing 产生 hard event；否则仅产生 audit-only event。
 
+### 5.1 时序化、类型化 provenance
+
+运行时解析出的目标不再由“目标字符串是否出现在某段读取文本中”授权。令时刻 $t$ 的 provenance ledger 为
+
+$$
+L_t=\{q_i=(v_i,k_i,r_i,o_i,b_i,t_i,d_i)\mid t_i<t\},
+$$
+
+其中 $v_i$ 是 canonical identity，$k_i$ 是 identity type（如 principal、URL、channel），$r_i$ 是
+semantic role，$o_i$ 是产生它的 executed source call，$b_i$ 是 trust basis，$t_i$ 是产生顺序，
+$d_i$ 是派生深度。原始文档全文不是 permission point；只有 task-delegated authority read 或
+platform-attested structured read 中抽取出的 typed identity 才能追加到 ledger。
+
+对时刻 $t$ 的调用 $a_t$，一个动态目标 $x$ 被 provenance 授权，当且仅当存在 $q_i\in L_t$ 满足：
+
+$$
+\operatorname{canon}(x)=v_i
+\land \operatorname{type}(x)\simeq k_i
+\land \operatorname{requiredRole}(a_t,x)\simeq r_i
+\land \operatorname{cap}(q_i,a_t)=1.
+$$
+
+这里比较的是 typed canonical equality，而不是 substring containment。`cap` 还要求：
+
+- blocked/failed call 不产生 provenance；
+- agent 已写入 sink 的 identity 属于污染集 $W_t$，后续 write→read-back 不得重新产生 authority；
+- 普通 DATA read 不产生 authority；
+- read→read 只接受 structured URL delegation，并满足有界派生深度 $d_i<d_{max}$；
+- 每个调用使用调用前的 ledger snapshot，post-hoc 检测不得用未来 evidence 反向授权过去调用。
+
+因此允许条件由静态 TaskContract permission 与动态 typed provenance 组成，而 benign observation
+只用于 utility/漂移估计，不产生授权能力。
+
 ## 6. 良性误报约束
 
 设部署集合为 $S=S_{\text{plant}}\cup S_{\text{wrap}}$。对良性分布 $\mathcal B_G$，定义：
@@ -359,3 +392,16 @@ $$
 - **已实现的 synthesis pipeline**：自动发现、合成、部署、检测、更新；
 - **形式化目标/下一步评估**：在候选集上估计 coverage curve 和最小部署成本；
 - **未来扩展**：RPC/egress hard WRAP、Auditor、显式 graph optimizer。
+
+## Changelog
+
+- 2026-07-15：将核心表示收缩为 `Value(id, origin, parents, tags)`、
+  `Edge(source, transform, target)` 与 `Effect(tool, args, sources)`；实时允许条件统一为
+  `ControlAllowed ∧ ArgumentsProven ∧ TagsAllowed`。PLANT 作为 value-level capability tag 与 WRAP
+  argument proof 联合执行，兄弟值不继承 marker，只有真实派生边传播 tags。
+- 2026-07-16：纠正环境计划与任务图的时序边界。环境 perception 仅持久化 capability/effect schema、
+  PLANT placement 与 WRAP boundaries；可信任务到达后、执行前才合成 task-scoped authority graph，
+  并按 environment/task fingerprint 独立缓存，不再写入 environment plan hash。
+- 2026-07-15：将 WRAP 动态授权从 raw `source_content` 字符串包含升级为时序化 typed provenance
+  ledger；加入 role/type/canonical identity、write→read 污染排除、有界 structured read delegation，
+  并规定决策必须绑定调用前 snapshot。用户明确批准该方法级修改。

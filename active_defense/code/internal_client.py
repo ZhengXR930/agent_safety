@@ -50,6 +50,23 @@ DEEPSEEK_MODELS = {
 _NO_TEMP = {"kimi-k2.6", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
 
 
+def _normalize_deepseek_roles(client: OpenAI) -> OpenAI:
+    """Adapt the OpenAI `developer` role to DeepSeek's equivalent `system` role."""
+    original = client.chat.completions.create
+
+    def create(*args, **kwargs):
+        messages = kwargs.get("messages")
+        if messages:
+            kwargs["messages"] = [
+                ({**m, "role": "system"} if isinstance(m, dict) and m.get("role") == "developer" else m)
+                for m in messages
+            ]
+        return original(*args, **kwargs)
+
+    client.chat.completions.create = create  # type: ignore[assignment]
+    return client
+
+
 def chat(client, model: str, prompt: str) -> str:
     """One-shot chat completion (temperature 0 where supported).
 
@@ -108,7 +125,7 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
         key = read_config_key("DEEPSEEK_API_KEY", root=root)
         if not key:
             raise RuntimeError("Missing DEEPSEEK_API_KEY (env or config.txt).")
-        return OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key)
+        return _normalize_deepseek_roles(OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key))
     if model in MODEL_REGISTRY:
         key = read_config_key(api_key_env, root=root)
         if not key:
@@ -120,4 +137,3 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
             default_headers={"Api-Key": key},
         )
     return internal_openai_client(api_key_env=api_key_env, root=root)
-

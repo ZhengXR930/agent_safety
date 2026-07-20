@@ -1,0 +1,157 @@
+"""Reusable baseline adapters for the official MSB runner."""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
+EVENTS = HERE.parent / "experiment_stage/mcp_full_20260718/msb_detection_events.jsonl"
+
+
+class StackOneGuard:
+    def __init__(self) -> None:
+        self.cache = {}
+        node = ROOT / "benchmarks/external/defender/.runtime/node-v22.17.0-linux-x64/bin/node"
+        server = HERE / "defender_jsonl_server.mjs"
+        self.proc = subprocess.Popen(
+            [str(node), str(server)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1
+        )
+
+    async def check(self, text: str, location: str, tool_name: str) -> bool:
+        key = (text, location, tool_name)
+        if key in self.cache:
+            allowed, result = self.cache[key]
+            _record("stackone", location, tool_name, allowed, {**result, "cached": True})
+            return allowed
+        assert self.proc.stdin and self.proc.stdout
+        self.proc.stdin.write(json.dumps({"text": text, "tool_name": tool_name}) + "\n")
+        self.proc.stdin.flush()
+        result = json.loads(self.proc.stdout.readline())
+        allowed = bool(result.get("allowed", True))
+        self.cache[key] = (allowed, result)
+        _record("stackone", location, tool_name, allowed, result)
+        return allowed
+
+
+class MCPGuard:
+    def __init__(self) -> None:
+        self.cache = {}
+        repo = ROOT / "benchmarks/external/MCP-Guard"
+        sys.path.insert(0, str(repo))
+        previous = Path.cwd()
+        try:
+            os.chdir(repo)
+            from src.mcp_guard.core import guardrail_scan
+            from src.mcp_guard.schemas import GuardrailRequest
+        finally:
+            os.chdir(previous)
+        self.scan = guardrail_scan
+        self.request = GuardrailRequest
+
+    async def check(self, text: str, location: str, tool_name: str) -> bool:
+        key = (text, location, tool_name)
+        if key in self.cache:
+            allowed, details = self.cache[key]
+            _record("mcpguard", location, tool_name, allowed, {**details, "cached": True})
+            return allowed
+        detail = EVENTS.with_suffix(".detector.log")
+        detail.parent.mkdir(parents=True, exist_ok=True)
+        with detail.open("a", encoding="utf-8") as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+            result = await self.scan(
+                self.request(tool_name=tool_name, tool_description=text, tool_input_schema={})
+            )
+        if hasattr(result, "dict"):
+            result = result.dict()
+        allowed = bool(result.get("allowed", True))
+        details = {"stage": result.get("detection_stage")}
+        self.cache[key] = (allowed, details)
+        _record("mcpguard", location, tool_name, allowed, details)
+        return allowed
+
+
+class PipelockGuard:
+    """MCP-native response scanner using upstream ``pipelock mcp scan``.
+
+    The adapter only translates the benchmark interception point into a valid
+    MCP JSON-RPC response. Detection rules and thresholds remain the upstream
+    balanced preset; no benchmark labels or task-specific policy are used.
+    """
+
+    def __init__(self) -> None:
+        self.cache = {}
+        binary = os.environ.get("PIPELOCK_BIN") or shutil.which("pipelock")
+        if not binary:
+            raise RuntimeError("Set PIPELOCK_BIN to the official Pipelock binary")
+        config = os.environ.get("PIPELOCK_CONFIG")
+        command = [binary, "mcp", "scan", "--json"]
+        if config:
+            command.extend(["--config", config])
+        self.proc = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            bufsize=1,
+        )
+
+    async def check(self, text: str, location: str, tool_name: str) -> bool:
+        key = (text, location, tool_name)
+        if key in self.cache:
+            allowed, result = self.cache[key]
+            _record("pipelock", location, tool_name, allowed, {**result, "cached": True})
+            return allowed
+        assert self.proc.stdin and self.proc.stdout
+        if location == "metadata":
+            result_payload = {
+                "tools": [{"name": tool_name, "description": text, "inputSchema": {"type": "object"}}]
+            }
+        else:
+            result_payload = {"content": [{"type": "text", "text": text}]}
+        message = {"jsonrpc": "2.0", "id": 1, "result": result_payload}
+        self.proc.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+        self.proc.stdin.flush()
+        result = json.loads(self.proc.stdout.readline())
+        allowed = bool(result.get("clean", False))
+        details = {
+            "action": result.get("action"),
+            "matches": [m.get("pattern_name") for m in result.get("matches", [])],
+        }
+        self.cache[key] = (allowed, details)
+        _record("pipelock", location, tool_name, allowed, details)
+        return allowed
+
+
+def _record(baseline: str, location: str, tool_name: str, allowed: bool, details: dict) -> None:
+    EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    with EVENTS.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"baseline": baseline,
+                            "case_id": os.environ.get("LANGSMITH_PROJECT"),
+                            "location": location, "tool_name": tool_name,
+                            "allowed": allowed, "details": details}, ensure_ascii=False) + "\n")
+
+
+_GUARDS = {}
+
+
+def get_guard(name: str):
+    if name == "none":
+        return None
+    if name not in _GUARDS:
+        if name == "stackone":
+            _GUARDS[name] = StackOneGuard()
+        elif name == "mcpguard":
+            _GUARDS[name] = MCPGuard()
+        elif name == "pipelock":
+            _GUARDS[name] = PipelockGuard()
+        else:
+            raise ValueError(f"unknown baseline guard: {name}")
+    return _GUARDS[name]
