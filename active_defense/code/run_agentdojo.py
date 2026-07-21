@@ -8,8 +8,9 @@ import random
 from pathlib import Path
 
 from code.benchmarks.agentdojo import AgentDojoRunner
-from code.benchmarks.agentdojo import tool_schemas
+from code.benchmarks.agentdojo import tool_registrations
 from code.defense.engine import Engine
+from code.defense.memory import RUNTIME_CONTEXT_SOURCE
 from code.defense.plan_store import PlanStore
 from code.defense.plant import PlantDesigner
 from code.defense.taskcontractor import TaskContract
@@ -19,9 +20,23 @@ from code.internal_client import client_for_model
 def pipeline_for(model):
     from agentdojo.agent_pipeline.agent_pipeline import AgentPipeline, PipelineConfig
     from agentdojo.agent_pipeline.llms.openai_llm import OpenAILLM
+    # AgentDojo's legacy personalized attacks reject newer OpenAI model IDs
+    # before an episode starts. Extend its display-name registry by provider
+    # family; this changes only how the attack addresses the model, not the
+    # model endpoint, task, injection, or defense behavior.
+    if str(model).lower().startswith("gpt-"):
+        from agentdojo.attacks.base_attacks import MODEL_NAMES
+        MODEL_NAMES.setdefault(str(model), "GPT-4.1")
     llm = OpenAILLM(client_for_model(model), model); llm.name = model
     return AgentPipeline.from_config(PipelineConfig(
-        llm=llm, defense=None, system_message_name=None, system_message=None))
+        llm=llm, model_id=None, defense=None,
+        system_message_name=None, system_message=None))
+
+
+def _incident_has_route(incident: dict, route: str) -> bool:
+    """Count mixed task-level incidents from their proposal-local decisions."""
+    return (incident.get("route") == route or
+            any(item.get("route") == route for item in incident.get("proposals", ())))
 
 
 def main():
@@ -36,6 +51,8 @@ def main():
                         help="Plant self-review model; defaults to GPT-5.5")
     parser.add_argument("--boundary-mode", choices=("declared", "inferred"), default="declared")
     parser.add_argument("--injections", help="optional JSON object passed to AgentDojo environment")
+    parser.add_argument("--runtime-context",
+                        help="operator-attested capability/argument context JSON sidecar")
     parser.add_argument("--random-pairs", type=int, default=0)
     parser.add_argument("--all-compatible-pairs", action="store_true",
                         help="enumerate every compatible task/injection pair; record benign once per task")
@@ -63,10 +80,14 @@ def main():
     os.environ["SECAGENT_POLICY_MODEL"] = args.contract_model
     from agentdojo.task_suite.load_suites import get_suite
     suite = get_suite("v1", args.suite)
+    runtime_context = (json.loads(Path(args.runtime_context).read_text())
+                       if args.runtime_context else {})
     engine = Engine(client_for_model(args.contract_model), args.contract_model)
     scope = f"agentdojo_{args.suite}_{args.boundary_mode}"
-    engine.perceive(tool_schemas(suite, args.boundary_mode),
-                    store=PlanStore(args.plan_store, scope))
+    source_carriers = ([vars(RUNTIME_CONTEXT_SOURCE)] if runtime_context else [])
+    engine.register_trusted_tools(
+        tool_registrations(suite, args.boundary_mode), PlanStore(args.plan_store, scope),
+        source_carriers=source_carriers)
     runner = AgentDojoRunner(suite, pipeline_for(args.agent_model), engine)
     injections = json.loads(Path(args.injections).read_text()) if args.injections else {}
     contract_overrides = (json.loads(Path(args.contract_file).read_text())
@@ -138,7 +159,8 @@ def main():
             contract = contracts[task_id]
             if task_id not in state["benign_by_task"]:
                 benign = runner.run(user_task, contract=contract,
-                                    plant_factory=plant_for(contract))
+                                    plant_factory=plant_for(contract),
+                                    runtime_context=runtime_context)
                 benign.pop("environment", None)
                 state["benign_by_task"][task_id] = benign
                 write_checkpoint(state)
@@ -148,7 +170,8 @@ def main():
             attack_injections = attacker.attack(user_task, injection_task)
             attack_result = runner.run(
                 user_task, injection_task=injection_task, injections=attack_injections,
-                contract=contract, plant_factory=plant_for(contract))
+                contract=contract, plant_factory=plant_for(contract),
+                runtime_context=runtime_context)
             attack_result.pop("environment", None)
             state["attacks"].append({"task": task_id, "injection": injection_id,
                                      "attack_name": args.attack, "result": attack_result})
@@ -172,9 +195,11 @@ def main():
             "attack_utility": sum(row["result"]["utility"] for row in attacks),
             "asr": sum(row["result"]["asr"] for row in attacks),
             "macro_attack_utility": macro_utility, "macro_asr": macro_asr,
-            "approval_episodes": sum(any(i["route"] == "approval" for i in row["result"]["incidents"])
+            "approval_episodes": sum(any(_incident_has_route(i, "approval")
+                                         for i in row["result"]["incidents"])
                                      for row in attacks),
-            "auditor_episodes": sum(any(i["route"] == "auditor" for i in row["result"]["incidents"])
+            "auditor_episodes": sum(any(_incident_has_route(i, "auditor")
+                                        for i in row["result"]["incidents"])
                                     for row in attacks),
             "plant_deployed": sum(len(row["result"]["plants_deployed"]) for row in attacks),
             "plant_committed": sum(len(row["result"]["plant_events"]) for row in attacks),
@@ -213,10 +238,12 @@ def main():
             raw_contract = contract_overrides.get(task_id)
             contract = (TaskContract.from_dict(raw_contract) if raw_contract is not None
                         else engine.contract(user_task.PROMPT))
-            benign = runner.run(user_task, contract=contract, plant_factory=plant_for(contract))
+            benign = runner.run(user_task, contract=contract, plant_factory=plant_for(contract),
+                                runtime_context=runtime_context)
             attack = runner.run(user_task, injection_task=injection_task,
                                 injections=attack_injections, contract=contract,
-                                plant_factory=plant_for(contract))
+                                plant_factory=plant_for(contract),
+                                runtime_context=runtime_context)
             benign.pop("environment", None); attack.pop("environment", None)
             rows.append({"task": task_id, "injection": injection_id,
                          "attack_name": args.attack, "benign": benign, "attack": attack})
@@ -228,7 +255,8 @@ def main():
         for task_id in filter(None, map(str.strip, args.tasks.split(","))):
             contract = engine.contract(suite.get_user_task_by_id(task_id).PROMPT)
             result = runner.run(suite.get_user_task_by_id(task_id), injections=injections,
-                                contract=contract, plant_factory=plant_for(contract))
+                                contract=contract, plant_factory=plant_for(contract),
+                                runtime_context=runtime_context)
             result.pop("environment", None)
             rows.append({"task": task_id, **result})
             checkpoint()
@@ -239,15 +267,20 @@ def main():
                    "attack_utility": sum(row["attack"]["utility"] for row in rows),
                    "asr": sum(row["attack"]["asr"] for row in rows),
                    "pass": sum(d["route"] == "pass" for row in rows for d in row["attack"]["decisions"]),
-                   "auditor": sum(i["route"] == "auditor" for row in rows for i in row["attack"]["incidents"]),
-                   "approval": sum(i["route"] == "approval" for row in rows for i in row["attack"]["incidents"]),
-                   "approved": sum(i["route"] == "approval" and i.get("approved") is True
+                   "auditor": sum(_incident_has_route(i, "auditor")
+                                  for row in rows for i in row["attack"]["incidents"]),
+                   "approval": sum(_incident_has_route(i, "approval")
                                    for row in rows for i in row["attack"]["incidents"]),
-                   "rejected": sum(i["route"] == "approval" and i.get("approved") is False
+                   "approved": sum(_incident_has_route(i, "approval") and i.get("approved") is True
                                    for row in rows for i in row["attack"]["incidents"]),
-                   "benign_auditor": sum(i["route"] == "auditor" for row in rows for i in row["benign"]["incidents"]),
-                   "benign_approval": sum(i["route"] == "approval" for row in rows for i in row["benign"]["incidents"]),
-                   "benign_approved": sum(i["route"] == "approval" and i.get("approved") is True
+                   "rejected": sum(_incident_has_route(i, "approval") and i.get("approved") is False
+                                   for row in rows for i in row["attack"]["incidents"]),
+                   "benign_auditor": sum(_incident_has_route(i, "auditor")
+                                         for row in rows for i in row["benign"]["incidents"]),
+                   "benign_approval": sum(_incident_has_route(i, "approval")
+                                          for row in rows for i in row["benign"]["incidents"]),
+                   "benign_approved": sum(_incident_has_route(i, "approval") and
+                                          i.get("approved") is True
                                           for row in rows for i in row["benign"]["incidents"]),
                    "plant_deployed": sum(len(row["attack"]["plants_deployed"]) for row in rows),
                    "plant_committed": sum(len(row["attack"]["plant_events"]) for row in rows),

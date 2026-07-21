@@ -30,7 +30,7 @@ def _schema(tool, *, effect):
     properties = function["parameters"].get("properties", {})
     required = function["parameters"].get("required", [])
     return {"name": function["name"], "description": function.get("description", ""),
-            "arguments": list(properties), "critical_arguments": list(required), "effect": effect}
+            "arguments": list(properties), "effect": effect}
 
 
 def _completion(client, model, messages, tools):

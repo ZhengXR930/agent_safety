@@ -12,6 +12,7 @@ All backends are API-only (no local GPU).
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from openai import OpenAI, AzureOpenAI
@@ -45,6 +46,10 @@ DEEPSEEK_MODELS = {
     "deepseek-reasoner",  # DeepSeek-R1
 }
 
+OPENAI_COMPATIBLE_GATEWAYS = {
+    "claude-opus-4-7": ("YUNWU_API_URL", "YUNWU_API_KEY", "https://yunwu.ai/v1"),
+}
+
 
 # Models whose endpoint rejects an explicit `temperature` param.
 _NO_TEMP = {"kimi-k2.6", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
@@ -64,6 +69,37 @@ def _normalize_deepseek_roles(client: OpenAI) -> OpenAI:
         return original(*args, **kwargs)
 
     client.chat.completions.create = create  # type: ignore[assignment]
+    return client
+
+
+def _with_api_logging(client, model: str, provider: str):
+    """Record exact provider usage without changing the OpenAI-compatible API."""
+    try:
+        from api.local_api_logger.logger import APILogger
+    except ImportError:
+        return client
+    logger = APILogger(str(Path(__file__).resolve().parents[1] / "api/api_logs"))
+    original = client.chat.completions.create
+
+    def create(*args, **kwargs):
+        started = time.time()
+        try:
+            response = original(*args, **kwargs)
+        except Exception as exc:
+            logger.log_call(
+                model=model, request_data=dict(kwargs), response_data={},
+                user="active_defense", duration_ms=(time.time() - started) * 1000,
+                success=False, error=str(exc), metadata={"provider": provider})
+            raise
+        dump = getattr(response, "model_dump", None)
+        data = dump(mode="json") if callable(dump) else {"result": str(response)}
+        logger.log_call(
+            model=model, request_data=dict(kwargs), response_data=data,
+            user="active_defense", duration_ms=(time.time() - started) * 1000,
+            success=True, metadata={"provider": provider})
+        return response
+
+    client.chat.completions.create = create
     return client
 
 
@@ -125,15 +161,25 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
         key = read_config_key("DEEPSEEK_API_KEY", root=root)
         if not key:
             raise RuntimeError("Missing DEEPSEEK_API_KEY (env or config.txt).")
-        return _normalize_deepseek_roles(OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key))
+        return _with_api_logging(
+            _normalize_deepseek_roles(OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key)),
+            model, "deepseek")
+    if model in OPENAI_COMPATIBLE_GATEWAYS:
+        url_env, key_env, default_url = OPENAI_COMPATIBLE_GATEWAYS[model]
+        key = read_config_key(key_env, root=root)
+        if not key:
+            raise RuntimeError(f"Missing {key_env} (env or config.txt).")
+        url = os.environ.get(url_env) or read_config_key(url_env, root=root) or default_url
+        return _with_api_logging(OpenAI(base_url=url, api_key=key), model, "yunwu")
     if model in MODEL_REGISTRY:
         key = read_config_key(api_key_env, root=root)
         if not key:
             raise RuntimeError(f"Missing {api_key_env}.")
-        return AzureOpenAI(
+        return _with_api_logging(AzureOpenAI(
             azure_endpoint=AZURE_ENDPOINT,
             api_key=key,
             api_version=MODEL_REGISTRY[model],
             default_headers={"Api-Key": key},
-        )
-    return internal_openai_client(api_key_env=api_key_env, root=root)
+        ), model, "modelhub")
+    return _with_api_logging(
+        internal_openai_client(api_key_env=api_key_env, root=root), model, "gpt_openapi")

@@ -39,7 +39,7 @@ class InjecAgentAdapterTests(unittest.TestCase):
             tools = load_tools(root)
         self.assertEqual([{
             "name": "MailSend", "description": "send a message",
-            "arguments": ["to", "body"], "critical_arguments": ["to"],
+            "arguments": ["to", "body"],
             "effect": True,
         }], tool_manifest(tools))
 
@@ -89,7 +89,7 @@ class InjecAgentAdapterTests(unittest.TestCase):
         self.assertTrue(result["attempted_stage1"])
         self.assertFalse(result["attack_success"])
         self.assertEqual([], result["committed"])
-        self.assertEqual("approval", result["proposals"][0]["route"])
+        self.assertEqual("auditor", result["proposals"][0]["route"])
 
     def test_same_tool_identity_change_is_argument_conflict(self):
         catalog = [{"toolkit": "Profile", "tools": [{
@@ -98,7 +98,8 @@ class InjecAgentAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             Path(root, "tools.json").write_text(json.dumps(catalog), encoding="utf-8")
             Path(root, "attacker_simulated_responses.json").write_text("{}", encoding="utf-8")
-            judge_client = FakeClient(response(content='{"verdict":"different"}'))
+            judge_client = FakeClient(response(content=json.dumps({
+                "verdict": "different"})))
             engine = Engine(judge_client, "fake")
             tools = load_tools(root); engine.perceive(tool_manifest(tools))
             client = FakeClient(

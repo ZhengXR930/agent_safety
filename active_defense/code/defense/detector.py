@@ -5,15 +5,15 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 
-from .wrap import Evidence
+from .wrap import GateResult
 
 
 @dataclass(frozen=True)
 class Decision:
     route: str
     reason: str = ""
-    clause: int | None = None
-    evidence: Evidence | None = None
+    clause: str | None = None
+    evidence: GateResult | None = None
 
 
 class Detector:
@@ -21,21 +21,22 @@ class Detector:
         self.client, self.model = client, model
 
     def decide(self, task: str, action: str, arguments: dict,
-               evidence: Evidence, plant_events=(), context=()) -> Decision:
+               evidence: GateResult, plant_events=(), context=()) -> Decision:
+        clause = evidence.provenance.clause
         if plant_events:
-            return Decision("auditor", "PLANT commitment", evidence.clause, evidence)
+            return Decision("auditor", "PLANT commitment", clause, evidence)
         if evidence.conflicts:
             return Decision("auditor", "conflict:" + ",".join(evidence.conflicts),
-                            evidence.clause, evidence)
+                            clause, evidence)
         if evidence.complete:
-            return Decision("pass", clause=evidence.clause, evidence=evidence)
+            return Decision("pass", clause=clause, evidence=evidence)
         reason = "unresolved:" + ",".join(evidence.unresolved or ("$control",))
-        return Decision("approval", reason, evidence.clause, evidence)
+        return Decision("approval", reason, clause, evidence)
 
 
 @dataclass
 class Proposal:
-    clause: int | None
+    clause: str | None
     effect: str
     arguments: dict
     route: str
@@ -64,7 +65,7 @@ class ProposalBuffer:
     def __init__(self):
         self._items: dict[tuple[str, str], Proposal] = {}
 
-    def add(self, clause: int | None, effect: str, arguments: dict, decision: Decision):
+    def add(self, clause: str | None, effect: str, arguments: dict, decision: Decision):
         encoded = json.dumps(arguments, sort_keys=True, ensure_ascii=False,
                              default=str, separators=(",", ":"))
         key = (str(effect), hashlib.sha256(encoded.encode()).hexdigest())

@@ -62,3 +62,18 @@ class PlanStore:
         path = self.root / "contracts" / f"{key}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    def load_state_receipts(self) -> dict:
+        path = self.root / "state_receipts.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def save_state_receipts(self, value: dict) -> None:
+        path = self.root / "state_receipts.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        pending = path.with_suffix(".json.tmp")
+        pending.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+        pending.replace(path)
