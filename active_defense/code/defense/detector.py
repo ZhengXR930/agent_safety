@@ -82,3 +82,10 @@ class ProposalBuffer:
             return None
         route = "auditor" if any(item.route == "auditor" for item in proposals) else "approval"
         return Incident(scope, route, proposals)
+
+    def pop(self, effect: str, arguments: dict) -> Proposal | None:
+        """Remove one exact held proposal without draining unrelated incidents."""
+        encoded = json.dumps(arguments, sort_keys=True, ensure_ascii=False,
+                             default=str, separators=(",", ":"))
+        key = (str(effect), hashlib.sha256(encoded.encode()).hexdigest())
+        return self._items.pop(key, None)

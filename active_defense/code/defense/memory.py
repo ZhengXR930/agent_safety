@@ -30,13 +30,52 @@ class CapabilitySurface:
     arguments: tuple[str, ...] = ()
     effect: bool = False
     observation: bool = False
+    # None means the registration substrate did not publish requiredness.
+    # An empty tuple means it explicitly declared that no argument is required.
+    required_arguments: tuple[str, ...] | None = None
+    # (argument, resolver grammars) for open prose positions.  The grammar
+    # names substrate parsers; an empty grammar tuple means inert prose.
+    interprets: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     @classmethod
     def from_dict(cls, value):
         effect = bool(value.get("effect", False))
+        arguments = value.get("arguments") or value.get("params")
+        required = value.get("required_arguments")
+        interpretations = value.get("interprets") or {}
+        if isinstance(interpretations, dict):
+            interpretations = tuple(
+                (str(name), tuple(map(str, grammars or ())))
+                for name, grammars in interpretations.items()
+                if str(name) in set(map(str, arguments or ()))
+            )
+        else:
+            interpretations = ()
+        if not arguments:
+            schema = value.get("inputSchema")
+            schema = schema if isinstance(schema, dict) else {}
+            properties = schema.get("properties")
+            arguments = list(properties) if isinstance(properties, dict) else []
+            if "required" in schema:
+                required = schema.get("required") or []
+        elif "required_arguments" not in value:
+            required = None
         return cls(str(value.get("name", "")), str(value.get("description", "")),
-                   tuple(map(str, value.get("arguments") or value.get("params") or [])),
-                   effect, bool(value.get("observation", not effect)))
+                   tuple(map(str, arguments or [])),
+                   effect, bool(value.get("observation", not effect)),
+                   None if required is None else tuple(map(str, required)),
+                   interpretations)
+
+    @property
+    def required(self) -> tuple[str, ...]:
+        """Conservative compatibility when an old manifest lacks requiredness."""
+        return self.arguments if self.required_arguments is None else self.required_arguments
+
+    def grammars(self, argument: str):
+        for name, grammars in self.interprets:
+            if name == str(argument):
+                return grammars
+        return None
 
 
 @dataclass
@@ -48,7 +87,15 @@ class EnvironmentPlan:
     def to_dict(self):
         return {"id": self.id,
                 "sources": {key: vars(value) for key, value in self.sources.items()},
-                "capabilities": {key: {**vars(value), "arguments": list(value.arguments)}
+                "capabilities": {key: {**vars(value),
+                                      "arguments": list(value.arguments),
+                                      "interprets": {
+                                          name: list(grammars)
+                                          for name, grammars in value.interprets
+                                      },
+                                      "required_arguments": (
+                                          None if value.required_arguments is None
+                                          else list(value.required_arguments))}
                             for key, value in self.capabilities.items()}}
 
     @classmethod

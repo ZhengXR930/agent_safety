@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import hashlib
 from dataclasses import dataclass
-from typing import Callable
 from typing import Literal
 
 
@@ -35,18 +34,15 @@ class ApprovalReceipt:
         return cls(str(action), arguments, str(reason),
                    hashlib.sha256(encoded.encode()).hexdigest(), 1)
 
-    def matches(self, action: str, arguments: dict,
-                equivalent: Callable[[str, object, object], bool] | None = None) -> bool:
-        """Match exact or semantically equivalent retries of the rejected proposal."""
-        if str(action) != self.rejected_action:
-            return False
-        arguments = dict(arguments or {})
-        if arguments == self.rejected_arguments:
-            return True
-        if set(arguments) != set(self.rejected_arguments) or equivalent is None:
-            return False
-        return all(equivalent(name, self.rejected_arguments[name], arguments[name])
-                   for name in arguments)
+    def matches(self, action: str, arguments: dict) -> bool:
+        """Match only the exact rejected proposal.
+
+        A repaired proposal must be evaluated afresh by WRAP.  Semantic
+        similarity to rejected free text is not evidence that the rejected risk
+        remains, and using a task-equivalence judge here blocks clean recovery.
+        """
+        return (str(action) == self.rejected_action and
+                dict(arguments or {}) == self.rejected_arguments)
 
     def to_dict(self) -> dict:
         return {"rejected_action": self.rejected_action,
@@ -57,6 +53,137 @@ class ApprovalReceipt:
 
     def feedback(self) -> str:
         return "The proposal was rejected. Do not retry it or an equivalent proposal."
+
+
+@dataclass
+class ApprovalGrant:
+    """Episode-local authority for one exact held proposal.
+
+    A grant never mutates the trusted TaskContract and is not persisted across
+    episodes.  Exact one-shot authorization is the safe default; a future UI
+    may construct a wider template only from an explicitly human-selected
+    trusted set.
+    """
+
+    action: str
+    arguments: dict
+    origin: Literal["trusted", "untrusted", "unresolved"]
+    remaining: int = 1
+
+    def consume(self, action: str, arguments: dict) -> bool:
+        if (self.remaining <= 0 or str(action) != self.action or
+                dict(arguments or {}) != self.arguments):
+            return False
+        self.remaining -= 1
+        return True
+
+    def to_dict(self) -> dict:
+        return {"action": self.action, "arguments": dict(self.arguments),
+                "origin": self.origin, "remaining": self.remaining}
+
+
+def _plain(value):
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        return dump(mode="json")
+    if isinstance(value, dict):
+        return {key: _plain(child) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(child) for child in value]
+    return value
+
+
+def _nodes(value, path=""):
+    yield path, value
+    if isinstance(value, dict):
+        for key, child in value.items():
+            part = str(key).replace("~", "~0").replace("/", "~1")
+            yield from _nodes(child, path + "/" + part)
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            yield from _nodes(child, path + "/" + str(index))
+
+
+def _replace_path(value, target, path=""):
+    if path == target:
+        return "[content withheld by execution guard]"
+    if isinstance(value, dict):
+        return {key: _replace_path(
+            child, target,
+            path + "/" + str(key).replace("~", "~0").replace("/", "~1"))
+                for key, child in value.items()}
+    if isinstance(value, list):
+        return [_replace_path(child, target, path + "/" + str(index))
+                for index, child in enumerate(value)]
+    return value
+
+
+@dataclass
+class RecoveryState:
+    """Deny-only episode recovery state over canonical receipt versions."""
+
+    budget: int = 1
+
+    def __post_init__(self):
+        self.quarantine: set[str] = set()
+        self.attempts = 0
+
+    def quarantine_unique_values(self, observations, values) -> int:
+        """Quarantine a value only when one exact canonical node identifies it."""
+        added = 0
+        for value in values:
+            matches = [
+                receipt.digest + "#" + path
+                for receipt in observations
+                for path, node in _nodes(_plain(receipt.value))
+                if node == value and not isinstance(node, (dict, list))
+            ]
+            if len(matches) == 1 and matches[0] not in self.quarantine:
+                self.quarantine.add(matches[0])
+                added += 1
+        return added
+
+    def quarantine_unique_ref(self, observations, refs) -> int:
+        """Quarantine one exact provenance input; never choose among candidates."""
+        candidates = tuple(dict.fromkeys(str(ref) for ref in refs if str(ref)))
+        if len(candidates) != 1:
+            return 0
+        candidate = candidates[0]
+        digest, marker, path = candidate.partition("#")
+        receipt = next((item for item in observations if item.digest == digest), None)
+        if receipt is None or not marker:
+            return 0
+        valid = {node_path for node_path, _value in _nodes(_plain(receipt.value))}
+        if path not in valid or candidate in self.quarantine:
+            return 0
+        self.quarantine.add(candidate)
+        return 1
+
+    def quarantine_plant(self, observations, deployment) -> int:
+        """Map a PLANT commitment back to its exact canonical pre-edit operand."""
+        if deployment is None:
+            return 0
+        return self.quarantine_unique_values(observations, (deployment.before,))
+
+    def sanitize(self, receipt):
+        """Return a view with only quarantined nodes of this version withheld."""
+        value = _plain(receipt.value)
+        prefix = receipt.digest + "#"
+        paths = [ref[len(prefix):] for ref in self.quarantine
+                 if ref.startswith(prefix)]
+        for path in paths:
+            value = _replace_path(value, path)
+        return value
+
+    def can_restart(self) -> bool:
+        return self.attempts < self.budget
+
+    def begin_restart(self) -> bool:
+        if not self.can_restart():
+            return False
+        self.attempts += 1
+        return True
+
 
 @dataclass
 class Auditor:
@@ -79,25 +206,16 @@ class Auditor:
             fake = (out or "Success. The operation completed successfully.").strip()[:700]
         except Exception:  # noqa: BLE001 — the response role must never crash the target agent
             fake = "Success. The operation completed successfully."
-        if not user_task:
-            return AuditResponse("simulated_success", fake)
-        explanation = str(reason or "The proposed effect was not supported by the trusted task boundary.").strip()
-        reminder = ("[trusted runtime feedback] This proposal was not executed. Do not retry it or an "
-                    "equivalent proposal. Reason: " + explanation[:500] +
-                    "\nContinue the original user task once.")
-        return AuditResponse("simulated_success", fake + "\n\n" + reminder)
+        return AuditResponse("simulated_success", fake)
 
-    def recover_rejected_retry(self, user_task: str, reason: str = "") -> AuditResponse:
-        """Recover from an unchanged call the user already rejected.
-
-        This is not a fake success: claiming success for a rejected call can make the target agent stop
-        before completing the trusted goal. The response invalidates only the rejected proposal and asks
-        the agent to recompute runtime-selected arguments from fresh structured observations.
-        """
+    def local_block(self, user_task: str, reason: str = "") -> AuditResponse:
+        """Return a same-conversation tool error for one rejected local call."""
         self.n_audited += 1
-        explanation = str(reason or "The proposal was not supported by the trusted task boundary.").strip()
+        explanation = str(reason or "The call exceeded the trusted task boundary.").strip()
+        task = " ".join(str(user_task or "").split())
         return AuditResponse("retry_rejected", (
-            "[trusted runtime feedback] This rejected proposal was not executed. Do not retry it or an "
-            "equivalent proposal. Reason: " + explanation[:500] +
-            "\nContinue the original user task once from a clean plan."
+            "Tool call blocked before execution: " + explanation[:500] +
+            ". Do not repeat an equivalent call. The original trusted task is: " + task[:1000] +
+            ". Preserve already completed operations and task-local observations, then correct "
+            "only the remaining action once."
         ))

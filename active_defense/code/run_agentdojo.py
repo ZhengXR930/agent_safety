@@ -43,12 +43,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="slack")
     parser.add_argument("--tasks", default="user_task_1")
-    parser.add_argument("--agent-model", default="deepseek-chat")
-    parser.add_argument("--contract-model", default="deepseek-chat")
+    parser.add_argument("--agent-model", default="deepseek-v4-flash")
+    parser.add_argument("--contract-model", default="deepseek-v4-flash")
     parser.add_argument("--plant-model", default="",
                         help="optional independent PlantDesigner model; defaults to contract model")
-    parser.add_argument("--plant-review-model", default="gpt-5.5-2026-04-24",
-                        help="Plant self-review model; defaults to GPT-5.5")
+    parser.add_argument("--plant-review-model", default="deepseek-v4-flash",
+                        help="Plant self-review model")
     parser.add_argument("--boundary-mode", choices=("declared", "inferred"), default="declared")
     parser.add_argument("--injections", help="optional JSON object passed to AgentDojo environment")
     parser.add_argument("--runtime-context",

@@ -166,7 +166,13 @@ Choose the appropriate tool"""}}}
         self.assertIn("write_file", {row["name"] for row in rows})
 
     def test_runtime_manifest_contains_only_one_security_bit(self):
-        manifest = _effect_manifest()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manifest.json"
+            path.write_text(json.dumps({"methods": [
+                {"capability": _canonical("FileSystem", "read_file"), "effect": False},
+                {"capability": _canonical("FileSystem", "write_file"), "effect": True},
+            ]}), encoding="utf-8")
+            manifest = _effect_manifest(path)
         self.assertIsInstance(manifest[_canonical("FileSystem", "read_file")], bool)
         self.assertFalse(manifest[_canonical("FileSystem", "read_file")])
         self.assertTrue(manifest[_canonical("FileSystem", "write_file")])

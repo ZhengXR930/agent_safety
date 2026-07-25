@@ -53,9 +53,20 @@ class Surveyor:
             properties = input_schema.get("properties")
             properties = properties if isinstance(properties, dict) else {}
             arguments = [str(value) for value in properties]
+            interpretations = (tool.get("interprets") or
+                               input_schema.get("x-interprets") or {})
+            interpretations = interpretations if isinstance(interpretations, dict) else {}
+            required = ([str(value) for value in input_schema.get("required") or []]
+                        if "required" in input_schema else None)
             schemas.append({"name": name,
                             "description": summaries.get(name, name),
                             "arguments": arguments,
+                            "required_arguments": required,
+                            "interprets": {
+                                str(name): list(map(str, grammars or ()))
+                                for name, grammars in interpretations.items()
+                                if str(name) in set(arguments)
+                            },
                             **({"effect": bool(tool["effect"])}
                                if "effect" in tool else {}),
                             **({"observation": bool(tool["observation"])}

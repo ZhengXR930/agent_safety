@@ -24,6 +24,22 @@ class Episode:
     def expose(self, source: str, observation, injector, source_kind: str | None = None):
         return self.plant.expose(source, observation, injector, source_kind)
 
+    def observe(self, capability: str, arguments: dict, observation, injector,
+                *, source: str | None = None, receipt_value=None,
+                call_id: str | None = None, recovery=None):
+        """Log the canonical return, then expose an independently decorated view."""
+        capability, arguments = str(capability), dict(arguments or {})
+        source = str(source or (capability + ":" + json.dumps(
+            arguments, sort_keys=True, ensure_ascii=False, default=str,
+            separators=(",", ":"))))
+        canonical = receipt_value(observation) if callable(receipt_value) else observation
+        receipt = self.wrap.observe(capability, arguments, canonical, call_id=call_id)
+        visible = recovery.sanitize(receipt) if recovery is not None else canonical
+        base = (injector(observation, visible)
+                if recovery is not None and visible != canonical else observation)
+        exposed = self.plant.expose(source, base, injector, capability)
+        return exposed
+
     def propose(self, effect: str, arguments: dict) -> Decision:
         evidence = self.wrap.evidence(effect, arguments)
         # A mediated capability may be a final effect for one clause and an
@@ -32,6 +48,11 @@ class Episode:
         if not evidence.complete:
             intermediate = self.wrap.intermediate_evidence(effect, arguments)
             if intermediate.complete:
+                evidence = intermediate
+            elif intermediate.provenance.clause is not None:
+                # A concrete receipt location exists, but its local semantic
+                # role is not proved. This is an Approval gap, not an
+                # unauthorized-action conflict.
                 evidence = intermediate
             elif evidence.conflicts and self.wrap.has_declared_intermediate(effect):
                 evidence = GateResult(Provenance(action=effect),
@@ -44,7 +65,33 @@ class Episode:
             self.proposals.add(evidence.provenance.clause, effect, arguments, decision)
         return decision
 
+    def propose_intermediate(self, capability: str, arguments: dict) -> Decision:
+        """Mediate only the outbound side of an observation-producing call.
+
+        A dual capability is not interpreted as a final task effect.  Its call
+        arguments are reconciled against an authorizing observation Clause;
+        the returned value remains an unowned receipt.
+        """
+        evidence = self.wrap.intermediate_evidence(capability, arguments)
+        plant_events = self.plant.detect(
+            arguments, channel=f"effect:{capability}")
+        decision = self.detector.decide(
+            self.contract.task, capability, arguments, evidence, plant_events,
+            self.wrap.context())
+        if decision.route != "pass":
+            self.proposals.add(
+                evidence.provenance.clause, capability, arguments, decision)
+        return decision
+
     def review(self, scope: str): return self.proposals.drain(scope)
+
+    def executable_arguments(self, effect: str, arguments: dict,
+                             decision: Decision) -> dict:
+        """Return the exact argument set that may be committed after Pass."""
+        if decision.route != "pass":
+            return dict(arguments or {})
+        clause = decision.evidence.clause if decision.evidence is not None else None
+        return self.wrap.executable_arguments(effect, arguments, clause)
 
     def record_state(self, state_id: str, value, arguments: dict, decision: Decision) -> bool:
         """Record only an actually allowed state commit."""
@@ -58,8 +105,10 @@ class Episode:
 
 class Engine:
     """Perceive once; specialize by trusted task; run independent PLANT and WRAP."""
-    def __init__(self, client=None, model: str = "deepseek-chat"):
+    def __init__(self, client=None, model: str = "deepseek-chat",
+                 reference_resolvers=None):
         self.client, self.model = client, model
+        self.reference_resolvers = dict(reference_resolvers or {})
         self.plan = None
         self._contracts = {}
         self.store = None
@@ -126,7 +175,7 @@ class Engine:
         if self.plan is None:
             raise RuntimeError("perceive() must run before contract synthesis")
         entries = tuple(sorted(map(str, effect_entries or ())))
-        material = ("clauses-v16-object-boundary\0" + str(getattr(self.plan, "id", "")) +
+        material = ("clauses-v34-scalar-effect-bindings\0" + str(getattr(self.plan, "id", "")) +
                     "\0" + str(trusted_task) + "\0" + repr(entries))
         key = hashlib.sha256(material.encode()).hexdigest()
         if key not in self._contracts:
@@ -148,7 +197,7 @@ class Engine:
         return Episode(contract, WrapRuntime(
             contract, getattr(self.plan, "capabilities", {}),
             SemanticJudge(self.client, self.model), runtime_context,
-            self.state_store), PlantRuntime(
+            self.state_store, self.reference_resolvers), PlantRuntime(
                 plants, PlantDesigner(
                     self.client, self.model, contract,
                     environment_sources=getattr(self.plan, "sources", {}))),

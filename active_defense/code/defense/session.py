@@ -36,13 +36,28 @@ def _extract_json(text: str):
 class ApiSession:
     """One-shot client-backed session used where an explicit project client is required."""
 
-    def __init__(self, client, model: str, context: str = ""):
+    def __init__(
+        self,
+        client,
+        model: str,
+        context: str = "",
+        *,
+        thinking: bool | str | None = None,
+        max_tokens: int | None = None,
+    ):
         self.client, self.model, self.context = client, model, context
+        self.thinking, self.max_tokens = thinking, max_tokens
 
     def ask(self, prompt: str) -> str:
         from code.internal_client import chat
         full = (self.context + "\n\n" + prompt) if self.context else prompt
-        return chat(self.client, self.model, full)
+        return chat(
+            self.client,
+            self.model,
+            full,
+            thinking=self.thinking,
+            max_tokens=self.max_tokens,
+        )
 
     def ask_json(self, prompt: str) -> dict:
         parsed = _extract_json(self.ask(prompt))

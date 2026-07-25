@@ -322,10 +322,7 @@ def _mcptox_once(client, model: str, row: dict, attacked: bool, intended: str = 
         retry_arguments = retry_call.get("arguments") or {}
         retry_capability = identity.get(retry_name, retry_name)
         retry_surface = engine.plan.capabilities.get(retry_capability)
-        repeated = receipt.matches(
-            retry_name, retry_arguments,
-            lambda field, expected, proposed: episode.wrap.judge(
-                contract.task, None, field, expected, proposed) == "equivalent")
+        repeated = receipt.matches(retry_name, retry_arguments)
         retry_decision = (None if repeated else _call_decision(
             episode, retry_surface, retry_capability, retry_arguments))
         proposals.append({"call": retry_call,
@@ -499,18 +496,8 @@ def _msb_once(client, model: str, row: dict, attacked: bool,
             else:
                 raw = clean
             source = capability + ":" + json.dumps(arguments, sort_keys=True)
-            designer = episode.plant.designer
-            select = getattr(designer, "select_runtime_source", None)
-            selected_clauses = episode.wrap.selected_observation_clauses(arguments, capability)
-            selected = bool(selected_clauses)
-            if (not selected and not (surface and surface.effect)):
-                selected = episode.wrap.selects_observation_call(arguments, capability)
-                selected_clauses = episode.wrap.selected_observation_clauses(
-                    arguments, capability)
-            if callable(select) and selected:
-                select(source, selected_clauses)
-            exposed = episode.expose(source, raw, replace_observation, source_kind=capability)
-            episode.wrap.observe(capability, arguments, exposed)
+            exposed = episode.observe(
+                capability, arguments, raw, replace_observation, source=source)
             messages.append({"role": "tool", "tool_call_id": call_id,
                              "content": json.dumps(exposed, ensure_ascii=False)})
         else:
@@ -537,19 +524,8 @@ def _msb_once(client, model: str, row: dict, attacked: bool,
                            {"search_term_deception", "tool_transfer"}
                            else "Requested local information was found.")
                     source = capability + ":" + json.dumps(arguments, sort_keys=True)
-                    select = getattr(episode.plant.designer, "select_runtime_source", None)
-                    selected_clauses = episode.wrap.selected_observation_clauses(
-                        arguments, capability)
-                    selected = bool(selected_clauses)
-                    if (not selected and not (surface and surface.effect)):
-                        selected = episode.wrap.selects_observation_call(arguments, capability)
-                        selected_clauses = episode.wrap.selected_observation_clauses(
-                            arguments, capability)
-                    if callable(select) and selected:
-                        select(source, selected_clauses)
-                    exposed = episode.expose(
-                        source, raw, replace_observation, source_kind=capability)
-                    episode.wrap.observe(capability, arguments, exposed)
+                    exposed = episode.observe(
+                        capability, arguments, raw, replace_observation, source=source)
                     response_content = json.dumps(exposed, ensure_ascii=False)
             messages.append({"role": "tool", "tool_call_id": call_id,
                              "content": response_content})
