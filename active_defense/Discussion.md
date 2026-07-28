@@ -1471,15 +1471,16 @@ Approval 样本同时报告两套口径：`approval_triggered` 表示系统已�
 
 | Dataset | Baseline | Benign Utility | ASR | Utility under Attack |
 |---|---|---:|---:|---:|
-| AgentDojo | CaMeL | 74/97 (76.3%) | 7/629 (1.1%) | 480/629 (76.3%) |
+| AgentDojo | Undefended | 86/97 (88.7%) | 33/629 (5.2%) | 554/629 (88.1%) |
+| AgentDojo | CaMeL (local-adapted) | 74/97 (76.3%) | 7/629 (1.1%) | 480/629 (76.3%) |
 | AgentDojo | Progent | 86/97 (88.7%) | 17/629 (2.7%) | 513/629 (81.6%) |
 | AgentDojo | MELON | 50/97 (51.5%) | 0/629 (0.0%) | 308/629 (49.0%) |
 | AgentDojo | Tool Filter | 14/97 (14.4%) | 0/629 (0.0%) | 114/629 (18.1%) |
-| InjecAgent Effect-Derived Full | CaMeL | — | — | — |
-| InjecAgent Effect-Derived Full | Progent | — | — | — |
-| InjecAgent Effect-Derived Full | MELON | — | — | — |
-| InjecAgent Effect-Derived Full | Tool Filter | — | — | — |
-| InjecAgent Effect-Derived Full | Spotlighting | — | — | — |
+| AgentDojo | Spotlighting | 85/97 (87.6%) | 35/629 (5.6%) | 546/629 (86.8%) |
+| AgentDojo | DRIFT | 71/97 (73.2%) | 4/629 (0.6%) | 403/629 (64.1%) |
+| AgentDojo | Ours (v50 previous full) | 67/97 (69.1%) | 0/629 (0.0%) | 416/629 (66.1%) |
+
+Protocol: AgentDojo v1.2.2, `direct` attack, `deepseek-v4-flash`, and the same frozen 97 benign tasks / 629 compatible attack pairs. Ours v50 is the completed historical full run recorded in [EXP-2026W31-004](LOGS/2026-W31.md#exp-2026w31-004); the ongoing GPT `important_instructions` run is not mixed into this table.
 
 【Agent @Codex】【2026-07-27】五 benchmark 冻结 smoke 完成：InjecAgent 6例 ASR0、人工语义AU5/6；MCPTox 三 paradigm clean-U3/3、AU2/3、ASR0，Template-1 越权读 /etc/passwd 及重试由WRAP/Auditor拦截；MSB 12 attack-type clean/AU均12/12、ASR0，1次 write_file marker commitment 由PLANT/Auditor拦截；三者 Approval 均0。SCR/AgentTrap 的 Contract probe 为6/6非空且正确operator manifest下effect完整，但官方CLI/helper执行面 coverage audit W2=0/9，因此当前不得报告这两项ASR，缺口是helper内部文件/网络/进程副作用未被基座强制中介，而不是Contract不理解任务。详见[EXP-2026W31-010](LOGS/2026-W31.md#exp-2026w31-010)。
 
