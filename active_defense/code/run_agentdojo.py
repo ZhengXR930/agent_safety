@@ -7,12 +7,17 @@ import os
 import random
 from pathlib import Path
 
+from code.agentdojo_protocol import (AGENT_MODEL, BENCHMARK_VERSION,
+                                     activate_vendored_agentdojo,
+                                     load_frozen_contracts, load_pair_manifest)
+
+activate_vendored_agentdojo()
+
 from code.benchmarks.agentdojo import AgentDojoRunner
 from code.benchmarks.agentdojo import tool_registrations
 from code.defense.engine import Engine
 from code.defense.memory import RUNTIME_CONTEXT_SOURCE
 from code.defense.plan_store import PlanStore
-from code.defense.plant import PlantDesigner
 from code.defense.taskcontractor import TaskContract
 from code.internal_client import client_for_model
 
@@ -43,12 +48,10 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="slack")
     parser.add_argument("--tasks", default="user_task_1")
-    parser.add_argument("--agent-model", default="deepseek-v4-flash")
-    parser.add_argument("--contract-model", default="deepseek-v4-flash")
+    parser.add_argument("--agent-model", default=AGENT_MODEL)
+    parser.add_argument("--contract-model", default=AGENT_MODEL)
     parser.add_argument("--plant-model", default="",
-                        help="optional independent PlantDesigner model; defaults to contract model")
-    parser.add_argument("--plant-review-model", default="deepseek-v4-flash",
-                        help="Plant self-review model")
+                        help="optional independent PLANT Placement Agent model; defaults to contract model")
     parser.add_argument("--boundary-mode", choices=("declared", "inferred"), default="declared")
     parser.add_argument("--injections", help="optional JSON object passed to AgentDojo environment")
     parser.add_argument("--runtime-context",
@@ -79,7 +82,7 @@ def main():
     # different hidden model if a tool activates that path later.
     os.environ["SECAGENT_POLICY_MODEL"] = args.contract_model
     from agentdojo.task_suite.load_suites import get_suite
-    suite = get_suite("v1", args.suite)
+    suite = get_suite(BENCHMARK_VERSION, args.suite)
     runtime_context = (json.loads(Path(args.runtime_context).read_text())
                        if args.runtime_context else {})
     engine = Engine(client_for_model(args.contract_model), args.contract_model)
@@ -90,11 +93,10 @@ def main():
         source_carriers=source_carriers)
     runner = AgentDojoRunner(suite, pipeline_for(args.agent_model), engine)
     injections = json.loads(Path(args.injections).read_text()) if args.injections else {}
-    contract_overrides = (json.loads(Path(args.contract_file).read_text())
-                          if args.contract_file else {})
+    contract_overrides, contract_bundle = (
+        load_frozen_contracts(args.contract_file) if args.contract_file else ({}, {}))
     plant_model = args.plant_model or args.contract_model
     plant_client = client_for_model(plant_model)
-    plant_review_client = client_for_model(args.plant_review_model)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
@@ -109,17 +111,15 @@ def main():
         write_checkpoint(rows)
 
     def plant_for(contract):
-        return ((lambda source, output: False) if args.no_plant else
-                PlantDesigner(plant_client, plant_model, contract,
-                              reviewer_client=plant_review_client,
-                              reviewer_model=args.plant_review_model))
+        return (None if args.no_plant else
+                engine.plant_agent(contract, plant_client, plant_model))
 
     if args.all_compatible_pairs:
         from agentdojo.attacks.attack_registry import load_attack
         attacker = load_attack(args.attack, suite, runner.pipeline)
         manifest_path = Path(args.pair_manifest) if args.pair_manifest else None
         if manifest_path is not None and manifest_path.exists():
-            pairs = [tuple(item) for item in json.loads(manifest_path.read_text(encoding="utf-8"))]
+            pairs = load_pair_manifest(manifest_path)
         else:
             pairs = []
             for task_id in suite.user_tasks:
@@ -138,6 +138,11 @@ def main():
                 pending.replace(manifest_path)
         selected_pairs = pairs[:args.max_pairs] if args.max_pairs else pairs
         state = {"schema": "agentdojo-matrix-v1", "suite": args.suite,
+                 "benchmark_version": BENCHMARK_VERSION,
+                 "agent_model": args.agent_model,
+                 "contract_bundle": ({k: contract_bundle.get(k) for k in (
+                     "schema", "contracts_sha256", "selected_candidate", "selection_score")}
+                     if contract_bundle else None),
                  "pair_manifest": str(manifest_path) if manifest_path else None,
                  "expected_pairs": len(pairs), "benign_by_task": {}, "attacks": []}
         if args.resume and output.exists():
@@ -189,7 +194,9 @@ def main():
         macro_asr = (sum(sum(item["asr"] for item in values) / len(values)
                          for values in by_task.values()) / len(by_task) if by_task else 0.0)
         summary = {
-            "output": str(output), "expected_pairs": len(pairs), "completed_pairs": len(attacks),
+            "output": str(output), "benchmark_version": BENCHMARK_VERSION,
+            "agent_model": args.agent_model,
+            "expected_pairs": len(pairs), "completed_pairs": len(attacks),
             "benign_tasks": len(state["benign_by_task"]),
             "benign_utility": sum(item["utility"] for item in state["benign_by_task"].values()),
             "attack_utility": sum(row["result"]["utility"] for row in attacks),
@@ -203,7 +210,37 @@ def main():
                                     for row in attacks),
             "plant_deployed": sum(len(row["result"]["plants_deployed"]) for row in attacks),
             "plant_committed": sum(len(row["result"]["plant_events"]) for row in attacks),
+            "plant_slot_exposed": sum(
+                len(row["result"]["plant_slots"]) for row in attacks),
+            "plant_slot_abstained": sum(
+                item["outcome"] == "abstained" for row in attacks
+                for item in row["result"]["plant_slots"]),
+            "benign_approval_events": sum(
+                _incident_has_route(i, "approval")
+                for result in state["benign_by_task"].values() for i in result["incidents"]),
+            "benign_audit_events": sum(
+                _incident_has_route(i, "auditor")
+                for result in state["benign_by_task"].values() for i in result["incidents"]),
+            "false_positive_episodes": sum(
+                any(_incident_has_route(i, route) for i in result["incidents"]
+                    for route in ("approval", "auditor"))
+                for result in state["benign_by_task"].values()),
+            "benign_plant_deployed": sum(
+                len(result["plants_deployed"]) for result in state["benign_by_task"].values()),
+            "benign_plant_committed": sum(
+                len(result["plant_events"]) for result in state["benign_by_task"].values()),
+            "benign_plant_slot_exposed": sum(
+                len(result["plant_slots"]) for result in state["benign_by_task"].values()),
+            "benign_plant_slot_abstained": sum(
+                item["outcome"] == "abstained"
+                for result in state["benign_by_task"].values()
+                for item in result["plant_slots"]),
         }
+        summary["false_positive_rate"] = (
+            summary["false_positive_episodes"] / summary["benign_tasks"]
+            if summary["benign_tasks"] else 0.0)
+        state["summary"] = summary
+        write_checkpoint(state)
         print(json.dumps(summary, ensure_ascii=False))
         return
     rows = []
@@ -284,10 +321,19 @@ def main():
                                           for row in rows for i in row["benign"]["incidents"]),
                    "plant_deployed": sum(len(row["attack"]["plants_deployed"]) for row in rows),
                    "plant_committed": sum(len(row["attack"]["plant_events"]) for row in rows),
+                   "plant_slot_exposed": sum(len(row["attack"]["plant_slots"]) for row in rows),
+                   "plant_slot_abstained": sum(
+                       item["outcome"] == "abstained" for row in rows
+                       for item in row["attack"]["plant_slots"]),
                    "benign_plant_deployed": sum(len(row["benign"]["plants_deployed"])
                                                   for row in rows),
                    "benign_plant_committed": sum(len(row["benign"]["plant_events"])
-                                                   for row in rows)}
+                                                   for row in rows),
+                   "benign_plant_slot_exposed": sum(
+                       len(row["benign"]["plant_slots"]) for row in rows),
+                   "benign_plant_slot_abstained": sum(
+                       item["outcome"] == "abstained" for row in rows
+                       for item in row["benign"]["plant_slots"])}
     else:
         summary = {"tasks": len(rows), "utility": sum(row["utility"] for row in rows)}
     print(json.dumps({"output": str(output), **summary}, ensure_ascii=False))

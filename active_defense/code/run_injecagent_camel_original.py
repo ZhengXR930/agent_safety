@@ -274,6 +274,8 @@ def main() -> None:
             "studies. The same list must be used in clean and attack conditions."
         ),
     )
+    ap.add_argument("--runtime-tools-overrides", type=Path)
+    ap.add_argument("--tool-schema-augmentations", type=Path)
     args = ap.parse_args()
 
     artifact = json.loads(args.policy.read_text(encoding="utf-8"))
@@ -282,6 +284,30 @@ def main() -> None:
         raise ValueError("Frozen policy was generated for a different tools.json")
     policy = artifact["tools"]
     tools = load_tools(args.data_dir)
+    if args.tool_schema_augmentations:
+        augmentations = json.loads(
+            args.tool_schema_augmentations.read_text(encoding="utf-8"))
+        for tool_name, parameters in augmentations.items():
+            if tool_name not in tools:
+                raise ValueError(f"Unknown augmented tool: {tool_name}")
+            existing = {
+                str(parameter["name"])
+                for parameter in tools[tool_name].get("parameters", [])
+            }
+            duplicates = existing & {
+                str(parameter["name"]) for parameter in parameters
+            }
+            if duplicates:
+                raise ValueError(
+                    f"Duplicate augmented parameters for {tool_name}: "
+                    f"{sorted(duplicates)}")
+            tools[tool_name] = {
+                **tools[tool_name],
+                "parameters": [
+                    *tools[tool_name].get("parameters", []),
+                    *parameters,
+                ],
+            }
     if set(policy) != set(tools):
         raise ValueError("Frozen policy does not cover the complete InjecAgent catalog")
     FrozenInjecAgentPolicyEngine.policy = policy
@@ -352,15 +378,32 @@ def main() -> None:
     runtime_tools = tuple(
         name.strip() for name in args.runtime_tools.split(",") if name.strip()
     )
+    runtime_tools_overrides = (
+        json.loads(args.runtime_tools_overrides.read_text(encoding="utf-8"))
+        if args.runtime_tools_overrides else {}
+    )
     unknown_runtime_tools = set(runtime_tools) - set(tools)
     if unknown_runtime_tools:
         raise ValueError(f"Unknown runtime-tools: {sorted(unknown_runtime_tools)}")
+    unknown_override_tools = {
+        name
+        for names in runtime_tools_overrides.values()
+        for name in names
+        if name not in tools
+    }
+    if unknown_override_tools:
+        raise ValueError(
+            f"Unknown runtime-tools override names: "
+            f"{sorted(unknown_override_tools)}")
     for case in cases:
         if case.id in done:
             continue
         executed: list[dict[str, Any]] = []
         env = InjecAgentEnvironment(executed=executed)
-        runtime = _runtime(tools, case, simulated, executed, runtime_tools)
+        case_runtime_tools = tuple(
+            runtime_tools_overrides.get(case.id, runtime_tools))
+        runtime = _runtime(
+            tools, case, simulated, executed, case_runtime_tools)
         global _PREOBSERVED_VALUE
         if args.protocol == "preobserved":
             bootstrap_namespace = camel_namespace.Namespace.with_builtins()
@@ -377,6 +420,14 @@ def main() -> None:
         except SecurityPolicyDeniedError as error:
             messages = []
             execution_error = str(error)
+        interpreter_errors = [
+            get_text_content_as_str(message["content"])
+            for message in messages
+            if message["role"] == "user"
+            and message.get("content")
+            and "Running the code gave the following error:" in
+            get_text_content_as_str(message["content"])
+        ]
         final = ""
         for message in reversed(messages):
             if message["role"] == "assistant" and message.get("content"):
@@ -397,15 +448,15 @@ def main() -> None:
             "user_tool_recalled": case.user_tool in committed,
             "task_completed_proxy": bool(final.strip()), "final": final,
             "execution_error": execution_error,
+            "interpreter_error_count": len(interpreter_errors),
+            "last_interpreter_error": (
+                interpreter_errors[-1] if interpreter_errors else None
+            ),
         })
-        config = {**vars(args), "data_dir": str(args.data_dir),
-                  "policy": str(args.policy), "output": str(args.output)}
-        if args.clean_assets is not None:
-            config["clean_assets"] = str(args.clean_assets)
-        if args.injection_overrides is not None:
-            config["injection_overrides"] = str(args.injection_overrides)
-        if args.user_task_overrides is not None:
-            config["user_task_overrides"] = str(args.user_task_overrides)
+        config = {
+            key: str(value) if isinstance(value, Path) else value
+            for key, value in vars(args).items()
+        }
         result = {"schema": "injecagent-original-camel-v2", "config": config,
                   "metrics": {"completed": len(rows),
                               "attack_success": sum(x["attack_success"] for x in rows),

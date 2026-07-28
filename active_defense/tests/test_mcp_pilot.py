@@ -6,7 +6,7 @@ from pathlib import Path
 from code.run_mcp_pilot import (RuntimeCache, _by, _call_decision, _canonical,
                                 _effect_manifest, _expose_tool_catalog, _json_object,
                                 _mcptox_control_schemas, _paired_mcptox_cases,
-                                _render_mcptox_catalog,
+                                _render_mcptox_catalog, _schema,
                                 _summary, _tool_blocks)
 from code.defense.engine import Engine
 from code.defense.memory import CapabilitySurface, EnvironmentPlan
@@ -36,6 +36,12 @@ Choose the appropriate tool based on the user's question."""
         self.assertEqual(["path"], rows[0]["arguments"])
         self.assertEqual([], rows[1]["arguments"])
 
+    def test_msb_schema_declares_both_boundary_bits(self):
+        raw = _schema({"function": {"name": "read", "description": "read",
+                       "parameters": {"properties": {"query": {}}}}}, False)
+        self.assertFalse(raw["effect"])
+        self.assertTrue(raw["observation"])
+
     def test_json_parser_accepts_fenced_and_python_dict(self):
         self.assertEqual("x", _json_object('```json\n{"tool":"x"}\n```')["tool"])
         self.assertEqual("x", _json_object("{'tool': 'x', 'arguments': {}}")['tool'])
@@ -45,8 +51,9 @@ Choose the appropriate tool based on the user's question."""
                 {"mode": "clean", "attack_success": False, "utility": True,
                  "false_positive": False}]
         self.assertEqual({"attack_n": 1, "asr": 0.0, "attack_utility": 1.0,
-                          "clean_n": 1, "clean_utility": 1.0, "fp": 0, "fpr": 0.0},
-                         _summary(rows))
+                          "clean_n": 1, "clean_utility": 1.0, "fp": 0, "fpr": 0.0,
+                          "plant_deployed": 0, "plant_slot_exposed": 0,
+                          "plant_slot_abstained": 0}, _summary(rows))
 
     def test_mcptox_pairing_does_not_assume_parallel_tool_name_order(self):
         row = _paired_mcptox_cases(1)[0]
@@ -84,7 +91,7 @@ Choose the appropriate tool based on the user's question."""
 
     def test_runtime_cache_reuses_environment_and_contract(self):
         schemas = [{"name": "server__read", "description": "read", "arguments": [],
-                    "effect": True}]
+                    "effect": True, "observation": False}]
         with tempfile.TemporaryDirectory() as root:
             cache = RuntimeCache(None, "model", root)
             first_engine, first_contract = cache.contract(schemas, "read it")
@@ -152,8 +159,9 @@ Choose the appropriate tool"""}}}
             Effect(write, {"path": {"from": read}}))])
         source = read + ':{"id": 1}'
         episode = engine.start(contract, [Plant(source, "plant-token", {"path": "plant-token"})])
-        exposed = episode.expose(source, {"path": "real"}, replace_observation, source_kind=read)
-        episode.wrap.observe(read, {"id": 1}, exposed)
+        exposed = episode.observe(
+            read, {"id": 1}, {"path": "real"}, replace_observation,
+            source=source)
         decision = episode.propose(write, {"path": "plant-token"})
         self.assertEqual("auditor", decision.route)
         self.assertEqual("PLANT commitment", decision.reason)

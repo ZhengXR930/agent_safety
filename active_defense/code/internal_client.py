@@ -11,6 +11,7 @@ All backends are API-only (no local GPU).
 
 from __future__ import annotations
 
+from functools import lru_cache
 import os
 import time
 from pathlib import Path
@@ -152,6 +153,7 @@ def chat(
     *,
     thinking: bool | str | None = None,
     max_tokens: int | None = None,
+    response_format: dict | None = None,
 ) -> str:
     """One-shot chat completion (temperature 0 where supported).
 
@@ -163,7 +165,7 @@ def chat(
     if thinking is False and model in DEEPSEEK_MODELS:
         # Compact structured defender roles do not benefit from tens of
         # thousands of hidden reasoning tokens.  Keep this opt-in so the
-        # task Agent and semantic materializer retain their normal reasoning.
+        # task and placement Agents retain their configured reasoning.
         kw["extra_body"] = {"thinking": {"type": "disabled"}}
     elif thinking == "brief" and model in DEEPSEEK_MODELS:
         # This provider-specific mode preserves a short reasoning pass before
@@ -172,6 +174,8 @@ def chat(
         kw["extra_body"] = {"enable_thinking": False}
     if max_tokens is not None:
         kw["max_tokens"] = max_tokens
+    if response_format is not None:
+        kw["response_format"] = dict(response_format)
     try:
         r = client.chat.completions.create(**kw)
     except Exception:                                    # noqa: BLE001 — retry once without temperature
@@ -248,3 +252,51 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
         return _with_api_logging(_normalize_model_params(client, model), model, "modelhub")
     return _with_api_logging(
         internal_openai_client(api_key_env=api_key_env, root=root), model, "gpt_openapi")
+
+@lru_cache(maxsize=16)
+def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
+                    root: Path | None = None):
+    """Build an OpenAI Agents SDK model for any registered project backend.
+
+    Defender roles use this boundary instead of issuing chat-completion calls
+    themselves.  Provider credentials and transport aliases remain centralized.
+    """
+    from agents import OpenAIChatCompletionsModel
+    from openai import AsyncAzureOpenAI, AsyncOpenAI
+
+    if model in DEEPSEEK_MODELS:
+        key = read_config_key("DEEPSEEK_API_KEY", root=root)
+        if not key:
+            raise RuntimeError("Missing DEEPSEEK_API_KEY (environment or config.txt).")
+        client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key)
+        return OpenAIChatCompletionsModel(
+            DEEPSEEK_TRANSPORT_MODELS.get(model, model), client)
+    if model in OPENAI_COMPATIBLE_GATEWAYS:
+        url_env, key_env, default_url = OPENAI_COMPATIBLE_GATEWAYS[model]
+        key = read_config_key(key_env, root=root)
+        if not key:
+            raise RuntimeError(f"Missing {key_env} (environment or config.txt).")
+        url = os.environ.get(url_env) or read_config_key(
+            url_env, root=root) or default_url
+        return OpenAIChatCompletionsModel(
+            model, AsyncOpenAI(base_url=url, api_key=key))
+    if model in MODEL_REGISTRY:
+        key = read_config_key(api_key_env, root=root)
+        if not key:
+            raise RuntimeError(f"Missing {api_key_env}.")
+        client = AsyncAzureOpenAI(
+            azure_endpoint=AZURE_ENDPOINT,
+            api_key=key,
+            api_version=MODEL_REGISTRY[model],
+            default_headers={"Api-Key": key},
+        )
+        return OpenAIChatCompletionsModel(model, client)
+    key = read_config_key(api_key_env, root=root)
+    if not key:
+        raise RuntimeError(
+            f"Missing {api_key_env} (environment or repository config.txt).")
+    client = AsyncOpenAI(
+        base_url=os.environ.get(
+            "INTERNAL_OPENAI_BASE_URL", DEFAULT_INTERNAL_BASE_URL),
+        api_key=key, default_headers={"Api-Key": key})
+    return OpenAIChatCompletionsModel(model, client)

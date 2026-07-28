@@ -3,11 +3,39 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
+from code.agentdojo_protocol import (AGENT_MODEL, BENCHMARK_VERSION,
+                                     load_pair_manifest)
 from code.run_policy_trajectory_attack import PolicyTarget
+
+
+class EpisodeTimeoutError(TimeoutError):
+    """Raised when one evaluation cell exceeds its wall-clock budget."""
+
+
+@contextmanager
+def _episode_timeout(seconds: int):
+    """Bound an episode without changing the evaluated defense semantics."""
+    if seconds <= 0:
+        yield
+        return
+    previous_handler = signal.getsignal(signal.SIGALRM)
+
+    def _raise_timeout(_signum, _frame):
+        raise EpisodeTimeoutError(f"episode exceeded {seconds}s")
+
+    signal.signal(signal.SIGALRM, _raise_timeout)
+    signal.setitimer(signal.ITIMER_REAL, seconds)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _write(path: Path, state: dict) -> None:
@@ -35,7 +63,7 @@ def _summary(records: list[dict], total: int) -> dict:
 
 def run(args: argparse.Namespace) -> dict:
     target = PolicyTarget(SimpleNamespace(
-        suite=args.suite, defense="progent", user_task="user_task_0",
+        suite=args.suite, defense=args.defense, user_task="user_task_0",
         injection_task="injection_task_1", agent_model=args.agent_model,
         policy_model=args.policy_model, progent_cache_dir=args.progent_cache_dir,
         progent_cache_label=args.progent_cache_label,
@@ -55,7 +83,7 @@ def run(args: argparse.Namespace) -> dict:
         for user_id in sorted(target.evaluator.suite.user_tasks)
         for injection_id in sorted(target.evaluator.suite.injection_tasks)
         if injection_id in selected_injections
-    ]
+    ] if not args.pair_manifest else load_pair_manifest(args.pair_manifest)
     if args.max_cells is not None:
         pairs = pairs[:args.max_cells]
     output = Path(args.output)
@@ -64,6 +92,8 @@ def run(args: argparse.Namespace) -> dict:
     else:
         state = {
             "config": vars(args),
+            "benchmark_version": BENCHMARK_VERSION,
+            "defense": args.defense,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "records": [],
         }
@@ -75,14 +105,15 @@ def run(args: argparse.Namespace) -> dict:
         injection_task = target.evaluator.suite.get_injection_task_by_id(injection_id)
         started = time.monotonic()
         try:
-            injections = dict(attacker.attack(user_task, injection_task))
-            if args.evaluation_pipeline == "undefended":
-                trace = target.evaluator._run_with_trace_using(
-                    target.evaluator.reachability_pipeline,
-                    injection_id, injections, user_id,
-                )
-            else:
-                trace = target.evaluator.run_with_trace(injection_id, injections, user_id)
+            with _episode_timeout(args.episode_timeout_seconds):
+                injections = dict(attacker.attack(user_task, injection_task))
+                if args.evaluation_pipeline == "undefended":
+                    trace = target.evaluator._run_with_trace_using(
+                        target.evaluator.reachability_pipeline,
+                        injection_id, injections, user_id,
+                    )
+                else:
+                    trace = target.evaluator.run_with_trace(injection_id, injections, user_id)
             record = {
                 "user_task": user_id,
                 "injection_task": injection_id,
@@ -117,19 +148,29 @@ def run(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="slack")
-    parser.add_argument("--attack", default="important_instructions")
+    parser.add_argument("--attack", default="direct")
     parser.add_argument("--evaluation-pipeline", choices=("progent", "undefended"),
                         default="progent")
-    parser.add_argument("--agent-model", default="deepseek-chat")
-    parser.add_argument("--policy-model", default="deepseek-chat")
+    parser.add_argument("--defense", choices=("progent", "camel"), default="progent")
+    parser.add_argument("--agent-model", default=AGENT_MODEL)
+    parser.add_argument("--policy-model", default=AGENT_MODEL)
+    parser.add_argument("--pair-manifest",
+                        help="shared fixed task/injection pair manifest")
     parser.add_argument("--progent-cache-dir", default=
                         "baseline/AutoDojo/agentdojo/variant_generation/progent/cache")
-    parser.add_argument("--progent-cache-label", default="openai/gpt-4o")
+    parser.add_argument(
+        "--progent-cache-label",
+        help="cache author model; defaults to --policy-model and must match it",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-cells", type=int)
     parser.add_argument("--injection-tasks",
                         help="comma-separated fixed manifest subset; default is every task")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument(
+        "--episode-timeout-seconds", type=int, default=900,
+        help="wall-clock limit per evaluation cell; set <=0 to disable",
+    )
     return parser.parse_args()
 
 

@@ -26,16 +26,27 @@ closed deterministic relation, a derivation Clause may additionally carry one ex
 $$e_k ::= identity(s)\mid count(s)\mid union(s)\mid argmin(s_1,s_2)\mid
 argmax(s_1,s_2)\mid difference(s_1,s_2),\qquad s_i\in S_k.$$
 
-The expression has no literals, object paths, predicates, proposal values, or nested calls. It is validated
-syntactically when the Contract is installed. The existing Contract Reviewer must additionally confirm that
-the complete expression is entailed by the trusted local instruction and that every operand has its stated
-role. An expression not explicitly accepted is deleted rather than repaired; that Clause falls back to the
-existing local semantic check or Approval. Accepted expressions are evaluated on demand over one immutable
+The expression has no literals, object paths, predicates, proposal values, or nested calls. Contract
+synthesis normally uses one TaskContract Agent call. Inside that role the model rehearses a plausible execution over the
+trusted task and registered capability manifest, then returns one typed final Contract; rehearsal is reasoning,
+not a second persisted plan or projection. A typed-transport failure (wrong/missing tool call, malformed JSON,
+non-object payload, or request failure) permits exactly one complete same-schema retransmission. It receives no
+semantic validation feedback and is not reflection or partial repair; a second transport failure rejects the
+whole Contract. Deterministic validation errors never trigger retransmission. Parse and validation failures are
+recorded separately in the trace. Deterministic code injects the exact trusted task root, normalizes Clause
+ids/redundant source closure, resolves only the unambiguous `cN.output` alias to that Clause's single declared
+output, and lowers an already-proposed aggregate used by several effect roles into role-local SSA outputs.
+These compiler steps add no action, capability, runtime value, field projection, or authority edge; paths such
+as `c0.files.id` remain invalid. Code accepts the final Contract atomically only if every action, argument
+position, source, dependency, and relation passes structural validation. There is no model reviewer, repair call, prefix salvage, compatibility fallback,
+or second Contract representation. Accepted expressions are evaluated on demand over one immutable
 tool-I/O receipt snapshot. Their results are proposal-local values, not persisted Clause receipts or
 authority. Relations outside this small language likewise remain the prose-local map
 $i_k:S_k\rightarrow o_k$. Clause order records only acyclic data dependencies, not a prescribed tool-call
 schedule. For `argmin/argmax`, candidate–measurement correspondence must be established by the immutable
 measurement receipt's call-argument/parent anchor; incidental receipt order is never used for alignment.
+Their item and score operands must be distinct declared sources; reusing the item domain as its own score is
+rejected even though it is syntactically computable.
 `union(s)` is defined only for outputs of a repeatable observable Clause whose call argument is bound to a
 complete earlier Clause-output domain also named by the union Clause. WRAP returns the deduplicated union
 only after call arguments prove that every domain member has a successful receipt; a partial traversal
@@ -51,16 +62,27 @@ names, but their runtime calls remain unpredicted. A task-selected reference may
 consumed by a later observable Clause; the actual reference and receipt path exist only at runtime.
 
 The Agent executes the trusted task once. Before execution, each effect clause installs one local WRAP gate
-at the already-mediated environment capability boundary. Observation returns execute without Clause
-assignment and append only immutable, content-addressed receipts. When a proposal reaches a gate, WRAP
-backward-resolves the gate's declared sources against the current receipt snapshot and evaluates its closed
-relations from scratch. Runtime content may instantiate values but cannot add an action, source, relation,
-or clause. Runtime provenance records only canonical tool-boundary I/O and proposed/executed effects:
+at the already-mediated environment capability boundary. Every successful observation appends one immutable,
+content-addressed canonical receipt. A receipt becomes WRAP authority only through an episode-local, append-only
+`ClauseReceiptBinding` anchored to the trusted task receipt, exact Contract, acquisition Clause, capability,
+and call arguments:
 
-$$r_o=(n_o,args_o,h(v_o)),\qquad p=(a,args).$$
+$$r_o=(n_o,args_o,h(v_o)),\quad
+b_o=(h(T),h(C_T),id_k,h(r_o),h(args_o)),\quad p=(a,args).$$
 
-The value $v_o$ remains in an execution sidecar. No Agent internal state or episode-wide flow graph is
-reconstructed.
+A dynamic observation call receives an admission only after its outbound arguments Pass the installed
+intermediate Clause gate. Admission is a one-shot token keyed by the substrate tool-call id and exact
+`(capability, arguments)`; exactly one matching successful return consumes it. Reuse, a mismatched return, or a
+later equal call receives no authority from an earlier admission. A pure observation may bind without a model
+only when all call arguments follow deterministically from literals or already-bound Clause outputs. Binding is
+reconciled to a fixed point when receipts arrive, so later complete domain evidence may attribute an earlier
+call, but proposal content can never create ownership. The append-only binding log remains audit evidence; for
+an exact Clause/source/argument location, only the newest receipt version is active WRAP authority. Unbound,
+schema-invalid, superseded, and quarantined observations may remain visible to the target Agent and PLANT but
+cannot enter the canonical WRAP authority view. When a proposal reaches a gate, WRAP backward-resolves only
+through that view and evaluates closed relations from scratch. Runtime content may instantiate values but cannot
+add an action, source, relation, Clause, or binding. The value $v_o$ remains in an execution sidecar; no Agent
+internal state or episode-wide flow graph is reconstructed.
 
 Two immutable roots may precede runtime observations. The trusted request is recorded as a task receipt.
 When the substrate has already fixed an episode value such as the workspace, repository, account, sandbox,
@@ -99,9 +121,14 @@ not part of the core WRAP guarantee.
 
 For MCP, the trusted manifest is compiled once at operator-approved server registration or installation,
 after protocol initialization and capability discovery. The compiler may consume the complete advertised
-`tools/list` JSON Schema, but persists only the compact `EnvironmentPlan` fields: `name`, `description`,
-`arguments`, `required_arguments`, `interprets`, `effect`, and `observation`.
-`arguments` is the public call shape, not a ranking of security importance. The hash of the full
+`tools/list` JSON Schema and persists the compact `EnvironmentPlan` fields: `name`, `description`,
+`arguments`, `required_arguments`, `interprets`, `effect`, `observation`, and the advertised `output_schema`
+when one exists. The output schema is trusted only as an operator/substrate-attested return-shape assumption:
+a successful value that violates it remains observable but cannot become WRAP authority. It certifies fields,
+types, and container shape—not that a field is semantically the task's “latest”, “best”, or intended object;
+such a claim still requires an explicit task relation and sufficient receipts. A missing output schema therefore
+removes shape-based authority rather than inviting the Contractor to invent fields. `arguments` is the public
+call shape, not a ranking of security importance. The hash of the full
 registration snapshot determines the existing plan identity/version;
 no schema, default, task allowance, or separate version field is added to the runtime manifest. A runtime
 catalog change cannot silently extend authority: it requires explicit trusted re-registration and produces
@@ -208,16 +235,20 @@ single-value Clause output with the same semantic role as the manifest argument 
 the matching output. Thus a bill may be the common source of distinct `recipient`, `amount`, and `subject`
 outputs, while an `event_timing` aggregate cannot stand in for both `start_time` and `end_time`. These
 Clauses state only trusted semantic relations and do not predict record fields, paths, formats, or values.
-The structural validator rejects one Clause output used by several different argument names; fail-closed
-sanitization removes such ambiguous authority if one repair still fails.
+A deterministic compiler lowering replaces one already-proposed aggregate-to-many binding with separate
+role-local semantic outputs before validation. It preserves the original common sources and effect argument
+roles but introduces no value or field path. If the resulting SSA references do not validate, the complete
+Contract remains fail-closed; there is no semantic repair or partial salvage.
 
-When an authority-bearing scalar must be extracted from semi-structured text, the narrow Judge has one
-bounded role: identify the exact existing receipt root/span that states the scalar requested by the Clause.
-It never judges a proposed summary/body, never sees the Agent trace or unrelated receipts, and cannot
-invent an action, source, field, path, or replacement value. Two extractions must return the same reference
-and exact scalar; this checks stability, not resistance to consistent steering. Code then verifies that the
-reference exists and the proposed authority argument exactly equals the extracted scalar. The result is
-proposal-local and never persistent or cross-task authority.
+When one proposal needs semantic extraction from semi-structured text, one WRAP Placement Agent resolves all
+requested semantic bindings for that proposal in a single typed call. It sees the one authoritative
+TaskContract, the complete proposed action/arguments, and only Clause-reachable immutable receipt nodes. It
+returns `(source, ref, value)` placements, never a verdict. Code then verifies that every requested source is
+covered exactly once, each ref is an allowed reachable node/span, and every constrained value exactly equals
+the proposal value; deterministic relations and quantified-domain completeness remain code-only. Invalid or
+missing placement is unresolved. There is no per-argument model call, local semantic materializer, reviewer,
+or compatibility fallback; placements are proposal-local and cached only for the exact proposal and receipt
+snapshot.
 
 An undeclared action is a control conflict; an unbindable authorized argument is Approval; a definite
 argument contradiction is Auditor. Pure observations in $O_{env}\setminus B_{env}$ are never gated.
@@ -235,20 +266,35 @@ the next persisted plan but never lets attacker-controlled runtime content widen
 
 PLANT is independent of this receipt system. For each successful observation, the adapter first stores the
 canonical unmodified return in WRAP's sidecar, then exposes a separately decorated view to the Agent.
-Relations always consume canonical values, so honey decoration cannot change count/union/difference or
-become WRAP authority. PLANT's detector fires only when an effect argument carries a deployed marker.
-WRAP can operate without PLANT and PLANT without WRAP; a final aggregator maps
-either hard signal to Auditor, incomplete WRAP evidence to Approval, and otherwise to Pass.
+Relations always consume canonical values, so honey decoration cannot become WRAP authority. PLANT and WRAP
+produce independent evidence on the complete proposal; the Decision retains both. Any PLANT commitment or
+definite WRAP conflict routes to Auditor, incomplete WRAP evidence routes to Approval, and only complete WRAP
+evidence with no PLANT commitment passes. Absence of a PLANT hit never authorizes.
 
-For an observation $x$, the same task contract $C_T$, and fresh nonce $\nu$, the PLANT designer may return a shape-preserving rewrite
-$(x',\tau)$. Deployment is accepted only when collection cardinality/order, keys, and all non-text leaves
-are unchanged; task-authorized objects are preserved, while one or more existing text leaves may replace
-an additional control target outside $C_T$ by a syntactically same-kind honey identity $\tau$ containing
-$\nu$. No added record or field is allowed. The outcome signal is
+PLANT eligibility is skeleton-anchored rather than Clause-anchored. Registration mechanically compiles every
+operator-attested capability with `observation=true` into a static plantable source slot $s\in P_{env}$; a
+TaskContract cannot create, remove, or bypass a slot. One task-scoped PLANT Placement Agent consumes the full
+$C_T$ as semantic context and is shared across benign, attack, retry, and recovery episodes for that exact
+contract/environment/model. For each novel exact observation version
+$v=(s,H(x))$, it makes at most one typed placement call:
 
-$$\operatorname{PlantCommit}(a,\tau)=\mathbb{1}[\exists z\in\operatorname{Leaves}(args(a)):z=\tau],$$
+$$\Pi_P(C_T,s,x,\nu)\to\{\mathsf{abstain}\}\cup(N,O\setminus N,operand,replacement).$$
 
-so quoting or summarizing a sentence that merely contains $\tau$ is not a commitment.
+The Agent performs one structured dataflow rehearsal: it proposes the exact-value dependencies N required by the normal trusted Contract trajectory and the dependencies O that would reach later tool arguments if observation-authored control were followed. A separable operand in O minus N is must-take whether it creates a new capability edge or is injected into an otherwise authorized effect argument. Broad transform outputs authorize the requested semantic transformation, not every source substring; observation-authored control operands enter N only when the trusted task explicitly preserves them, a declared acquisition/runtime argument consumes them, or a closed deterministic Contract relation selects them. Code—not the Agent—
+then applies an operand-level precision gate: an operand explicitly present in the trusted task or fixed as an
+exact Contract literal is protected, without exempting any other leaf in the same observation. The previous
+source-wide abstention for carriers that could also feed a downstream acquisition is not used. Code further
+requires one exact unique string occurrence, nonce presence, one-leaf shape preservation, unchanged
+keys/cardinality/non-text leaves, and a non-atomic collection edit. There is no reflection, reviewer, or
+fallback. Both placement and abstention are cached by exact `(source_kind, observation digest)`; changed
+content receives one new call.
+
+For a deployed token $\tau$, commitment scans every proposed argument leaf and retained trace channel:
+
+$$\operatorname{PlantCommit}(p,\tau)=\mathbb{1}[\exists z\in\operatorname{Leaves}(p):\tau\subseteq z].$$
+
+Deployment without later token use is not a security incident; consumption preserves the complete PLANT
+event independently of WRAP provenance.
 
 ## Approval and denial recovery
 
@@ -275,9 +321,10 @@ denial/quarantine state; hidden reasoning and the rejected proposal are discarde
 observation calls are replayed from the immutable receipt cache, and already committed effects are treated
 idempotently.
 
-The fresh session is positively re-anchored with the original trusted task and the instructions of the
-denied Contract Clauses. Before restart, WRAP may also recompute a complete argument binding for a denied
-Clause over the sanitized snapshot. Such a constructive anchor is emitted only when every bound position is
+The fresh session is positively re-anchored only with the original trusted task, structural ids of the
+denied/remaining Contract Clauses, and deterministic clean bindings. Model-generated Clause instruction prose
+is not copied into the recovery prompt. Before restart, WRAP may also recompute a complete argument binding for
+a denied Clause over the sanitized authority snapshot. Such a constructive anchor is emitted only when every bound position is
 a trusted literal or one unique scalar obtained without semantic inference from exact receipts, runtime
 context, or an accepted closed relation. Any binding whose structural parent or child intersects quarantine,
 any structured carrier requiring projection, any semantic-witness result, and any non-unique result is
@@ -287,8 +334,10 @@ and recompute runtime arguments. Rejected values, Agent reasoning, and attack-sp
 absent.
 
 Quarantine is deny-only and node-local. A rejected argument or PLANT commitment may quarantine a receipt node
-only when it identifies exactly one canonical `(receipt digest, structural path)`. The replayed Agent-facing
-view replaces that node with a neutral withheld marker while the canonical sidecar remains unchanged. An
+only when it identifies exactly one canonical `(receipt digest, structural path)`. Installing quarantine
+immediately invalidates cached WRAP placements and removes that exact node from the WRAP authority view. Both
+the replayed Agent-facing view and any later WRAP proof see a neutral withheld marker, while the canonical
+append-only receipt sidecar remains unchanged for audit. An
 ambiguous value is not stripped speculatively and therefore routes to Approval rather than manufacturing a
 poison attribution. The quarantine set is monotone during the episode, and at most one automatic fresh-session
 restart is allowed. Auditor's simulated success is returned only to the discarded corrupted turn and contains
@@ -308,6 +357,63 @@ guarantees integrity but may not complete the trusted task; the correct next sta
 
 ## Changelog
 
+- 2026-07-27: Replaced PLANT's source-wide downstream-acquisition abstention with an operand-level precision
+  gate. A task-explicit or exact Contract-literal operand is deterministically protected, while another
+  O-minus-N leaf in the same plantable observation remains eligible; dynamic normal values remain represented
+  in the Placement Agent's N set. This removes a carrier-wide coverage hole without adding a reviewer or model
+  turn. Split the former `plant.py` into model, structure, placement, and runtime modules without changing the
+  public `code.defense.plant` API.
+
+- 2026-07-27: Recast PLANT placement as one typed N versus O dataflow rehearsal rather than entity-specific candidate rules. The Agent must expose normal and observation-induced exact-value dependency sets and proposes one O-minus-N operand; deterministic code still alone verifies a unique nonce-bearing one-leaf rewrite. This covers extra dependencies injected into already-authorized effect arguments without granting free-form transform outputs authority over every source substring. Added placement traces for auditable abstention/rejection; no reviewer, fallback, or entity parser was added.
+
+- 2026-07-27: Removed domain-specific Contract/PLANT examples and made the single Contract Agent rehearse a manifest-only outcome ledger. Added operator-attested input/output schemas, format-scoped temporal canonicalization, strict Clause-reference syntax, and deterministic erasure of unsupported relation annotations. Effectful tools whose schema-attested return is produced by the same commit are now marked `effect_return`: a matching output Clause is valid only after an earlier identical effect Clause, and the exact passed call-id admits one receipt without repeating semantic placement. This adds no reviewer, partial Contract fallback, or runtime authority source.
+
+- 2026-07-27: Hardened TaskContract reliability without widening its semantic grammar. The trusted task field
+  is injected from the immutable request; one final Contract is deterministically compiled to role-local SSA;
+  missing effect presentation text and redundant sources are canonicalized; exact `cN.output` is resolved only
+  to that Clause's single declared output. Unknown actions, unattested runtime context, object-field paths, and
+  semantic validation errors still reject the whole Contract. Persisted sidecar traces separate transport from
+  validation failures. PLANT deterministically abstains before model placement when the current observation is
+  required as an argument to a downstream observation acquisition Clause.
+- 2026-07-27: Closed receipt replay and recovery-authority gaps. Dynamic observation admission is now a
+  one-shot exact tool-call-id token; direct capability values cannot authorize effect arguments without an
+  acquisition Clause; newer mutable-source receipts supersede older active authority versions; schema-invalid
+  returns stay visible but unbound. Quarantine immediately removes exact nodes from WRAP's authority view and
+  invalidates placement caches. Recovery reanchors from the trusted task, structural Clause ids, and
+  deterministic clean bindings only. Added operator-attested output JSON Schema to EnvironmentPlan as a
+  shape assumption, explicitly not a certificate of semantic roles such as “latest”.
+- 2026-07-26: Added task/Contract-scoped `ClauseReceiptBinding` as the sole runtime ownership edge from an
+
+- 2026-07-26: Added one atomic same-schema retransmission only for typed TaskContract transport failures and
+  explicit per-attempt transport traces. Successful transport still costs one call; deterministic validation
+  failures still reject the whole Contract without retry, reviewer, semantic repair, or partial fallback.
+  Tightened relation guidance to positional exact-source forms and rejected `argmin/argmax` that reuse the item
+  operand as scores. A fair two-tool probe exposed that proving `latest` additionally needs explicit output
+  acquisition Clause to a canonical observation receipt. Passed dynamic intermediate calls bind their exact
+  return; pure calls bind only through deterministic literal/already-bound argument reconciliation. Lazy WRAP
+  and the WRAP Placement Agent now traverse bound receipts only; same-capability but wrong-argument receipts
+  remain visible to the target/PLANT but cannot become authority. Bindings are episode-local, append-only,
+  proposal-independent, and add no Contract field, Agent call, reviewer, or fallback.
+- 2026-07-26: Replaced Contractor draft/reflection with one TaskContract Agent rehearsal returning one typed
+  final Contract plus deterministic atomic validation. Replaced PlantDesigner/reviewer with one task-scoped
+  PLANT Placement Agent and exact observation-version cache; replaced the per-value semantic Judge with one
+  proposal-level WRAP Placement Agent. Both Agents return untrusted placements only, while code verifies
+  structure/reachability/equality/coverage. Removed model, compatibility, and local-materialization fallbacks;
+  preserved PLANT and WRAP as independent evidence streams in every Decision.
+- 2026-07-26: Replaced the multi-pass Contract repair/reviewer/sanitizer chain with two-stage atomic
+  synthesis. The model now emits one complete draft and one complete self-reflected final Contract;
+  deterministic structural errors are supplied only to reflection. Final validation accepts the whole
+  Contract or rejects it to an empty candidate. Deleted prefix sanitization, relation-approval inheritance,
+  and all partial fallback paths. Cache eligibility is therefore limited to atomically valid finals.
+- 2026-07-26: Made PLANT eligibility skeleton-anchored. Trusted environment registration now compiles
+  every `observation=true` capability into a static plantable source slot and invalidates cached plans from
+  the pre-skeleton schema. Deleted both Clause-presence eligibility and the no-match fallback to all
+  Clauses. PLANT no longer consumes Contract Clauses at all: candidate selection receives only the trusted
+  task and exact observation source, while the retained `affects_benign` reviewer receives the exact
+  operand, replacement, and bounded local context. It asks only whether benign completion may require that
+  operand unchanged; possibility or uncertainty means abstention. Every runner must pass the explicit environment skeleton, and runtime metrics
+  distinguish slot exposure, deployment, and abstention. No runtime content or Contract can widen or erase
+  skeleton coverage.
 - 2026-07-25: Replaced the transitional global prose regex with manifest-grounded substrate resolution.
   `interprets` maps each open-prose argument to the exact resolver grammars active for that capability;
   WRAP reuses registered side-effect-free resolvers and binds their canonical entities. Empty lists attest

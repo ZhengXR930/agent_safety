@@ -58,10 +58,22 @@ class PlanStore:
         except (OSError, json.JSONDecodeError):
             return None
 
-    def save_contract(self, key: str, contract: dict) -> None:
+    def load_contract_trace(self, key: str) -> dict | None:
+        path = self.root / "contracts" / f"{key}.trace.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
+
+    def save_contract(self, key: str, contract: dict, trace: dict | None = None) -> None:
         path = self.root / "contracts" / f"{key}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(contract, indent=2, ensure_ascii=False), encoding="utf-8")
+        if trace is not None:
+            trace_path = self.root / "contracts" / f"{key}.trace.json"
+            trace_path.write_text(
+                json.dumps(trace, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def load_state_receipts(self) -> dict:
         path = self.root / "state_receipts.json"

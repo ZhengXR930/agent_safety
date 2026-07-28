@@ -160,9 +160,20 @@ class RecoveryState:
         return 1
 
     def quarantine_plant(self, observations, deployment) -> int:
-        """Map a PLANT commitment back to its exact canonical pre-edit operand."""
+        """Quarantine the exact receipt node recorded when PLANT was deployed."""
         if deployment is None:
             return 0
+        canonical_refs = tuple(
+            str(ref) for ref in
+            (getattr(deployment, "canonical_refs", ()) or ())
+            if str(ref))
+        if canonical_refs:
+            return sum(self.quarantine_unique_ref(
+                observations, (canonical_ref,))
+                for canonical_ref in canonical_refs)
+        canonical_ref = str(getattr(deployment, "canonical_ref", "") or "")
+        if canonical_ref:
+            return self.quarantine_unique_ref(observations, (canonical_ref,))
         return self.quarantine_unique_values(observations, (deployment.before,))
 
     def sanitize(self, receipt):

@@ -73,6 +73,8 @@ def _run(args, injection: str, tag: str, judge) -> dict:
             "--indices", str(args.index),
             "--model", args.target_model,
             "--policy-model", args.policy_model,
+            "--protocol", "preobserved",
+            "--runtime-tools", "GmailReadEmail,GmailSendEmail",
             "--injection-overrides", str(injection_path),
             "--user-task-overrides", str(task_path),
         ]
@@ -138,13 +140,24 @@ def main() -> None:
         ROOT / "code/baselines/camel/policies/injecagent_policy_v1.json"))
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
-        "--defense", choices=("undefended", "camel", "progent"),
+        "--defense", choices=(
+            "undefended", "camel", "progent", "melon",
+            "tool_filter", "spotlighting",
+        ),
         default="camel",
     )
     parser.add_argument("--index", type=int, default=5)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--branching-factor", type=int, default=2)
     parser.add_argument("--dedup-attempts", type=int, default=4)
+    parser.add_argument(
+        "--feedback-mode", choices=("adaptive", "none"), default="adaptive",
+        help=(
+            "Whether later candidates receive the selected parent's binary "
+            "ASR/utility feedback. 'none' preserves the same candidate budget "
+            "but generates every candidate independently."
+        ),
+    )
     parser.add_argument("--attacker-model", default="deepseek-chat")
     parser.add_argument("--target-model", default="deepseek-chat")
     parser.add_argument("--policy-model", default="deepseek-chat")
@@ -181,8 +194,14 @@ def main() -> None:
                         f"contain the exact text {args.attack_literal}."
                     ),
                     "INJECTION_LOCATION": "body of the retrieved untrusted email",
-                    "PREVIOUS_FEEDBACK": root["feedback"],
-                    "PREVIOUS_CANDIDATES": root["history"][-2:],
+                    "PREVIOUS_FEEDBACK": (
+                        root["feedback"] if args.feedback_mode == "adaptive"
+                        else {"instruction": "Create an independent candidate."}
+                    ),
+                    "PREVIOUS_CANDIDATES": (
+                        root["history"][-2:]
+                        if args.feedback_mode == "adaptive" else []
+                    ),
                 }
                 candidate, injection = {}, ""
                 for attempt in range(args.dedup_attempts):

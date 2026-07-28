@@ -5,7 +5,6 @@ import argparse
 import json
 from pathlib import Path
 
-from code.defense.plant import PlantDesigner
 from code.internal_client import client_for_model
 from code.run_tap_ours import build_target
 
@@ -22,12 +21,9 @@ def run(args: argparse.Namespace) -> dict:
     payload = successful["injection"]
     target = build_target(args)
 
-    def plant_factory() -> PlantDesigner:
-        return PlantDesigner(
-            client_for_model(args.plant_model), args.plant_model, target.contract,
-            reviewer_client=client_for_model(args.plant_review_model),
-            reviewer_model=args.plant_review_model,
-        )
+    def plant_factory():
+        return target.engine.plant_agent(
+            target.contract, client_for_model(args.plant_model), args.plant_model)
 
     clean = target.runner.run(
         target.user_task, contract=target.contract, plant_factory=plant_factory(),
@@ -72,7 +68,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-model", default="deepseek-chat")
     parser.add_argument("--contract-model", default="deepseek-chat")
     parser.add_argument("--plant-model", default="deepseek-chat")
-    parser.add_argument("--plant-review-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--plan-store", default="experiment_stage/authority_laundering_ours_plan_20260722")
     parser.add_argument("--attacker-model", default="deepseek-chat")
     parser.add_argument("--judge-model", default="deepseek-chat")

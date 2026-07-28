@@ -6,22 +6,96 @@ Only provider wiring and durable result checkpointing live here.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
+import sys
+import types
+from copy import deepcopy
 from pathlib import Path
 
+from code.agentdojo_protocol import (AGENT_MODEL, BENCHMARK_VERSION,
+                                     activate_vendored_agentdojo,
+                                     load_pair_manifest)
 from code.internal_client import client_for_model, read_config_key
 
+activate_vendored_agentdojo()
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _melon_content_text(value) -> str:
+    """Normalize AgentDojo text blocks at MELON's legacy string boundary."""
+    if isinstance(value, str):
+        return value
+    from agentdojo.types import get_text_content_as_str
+    return get_text_content_as_str(value or [])
+
+
+def _melon_block_messages(messages):
+    """Normalize MELON's masked strings back to AgentDojo content blocks."""
+    from agentdojo.types import text_content_block_from_string
+
+    converted = deepcopy(messages)
+    for message in converted:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = [text_content_block_from_string(content)]
+        elif isinstance(content, (list, tuple)):
+            message["content"] = [
+                text_content_block_from_string(item) if isinstance(item, str) else item
+                for item in content
+            ]
+        # Official MELON adds synthetic assistant tool-call demonstrations.
+        # They were not produced by DeepSeek, so no hidden reasoning exists to
+        # replay, but the thinking endpoint still requires the protocol field.
+        # Preserve real reasoning when present and attest the synthetic case
+        # with an empty value rather than disabling thinking for the target.
+        if (message.get("role") == "assistant" and message.get("tool_calls")
+                and "reasoning_content" not in message):
+            message["reasoning_content"] = ""
+    return converted
+
+
+def _adapt_official_melon_source(source: str) -> str:
+    """Patch only MELON/AgentDojo message representation boundaries."""
+    source = source.replace(
+        '+ original_msg["content"] +',
+        '+ _melon_content_text(original_msg["content"]) +',
+    )
+    source = source.replace(
+        'self.llm.query(masked_query, masked_runtime, masked_env, masked_messages, masked_extra_args)',
+        'self.llm.query(masked_query, masked_runtime, masked_env, '
+        '_melon_block_messages(masked_messages), masked_extra_args)',
+    )
+    source = source.replace(
+        '"content": "The tool outputs contain potential prompt injection, stopping execution.",',
+        '"content": [_melon_text_block('
+        '"The tool outputs contain potential prompt injection, stopping execution.")],',
+    )
+    return source
+
+
+def _melon_text_block(text: str):
+    from agentdojo.types import text_content_block_from_string
+    return text_content_block_from_string(text)
+
+
 def _official_melon():
     path = ROOT / "baseline/MELON/pi_detector.py"
-    spec = importlib.util.spec_from_file_location("official_melon_pi_detector", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
+    # MELON predates AgentDojo's block-based message content. Adapt only the
+    # representation at its concatenation boundary; detector logic is loaded
+    # unchanged from the official source.
+    source = _adapt_official_melon_source(path.read_text(encoding="utf-8"))
+    module = types.ModuleType("official_melon_pi_detector")
+    module.__file__ = str(path)
+    module.__dict__.update({
+        "_melon_content_text": _melon_content_text,
+        "_melon_block_messages": _melon_block_messages,
+        "_melon_text_block": _melon_text_block,
+    })
+    sys.modules[module.__name__] = module
+    exec(compile(source, str(path), "exec"), module.__dict__)
     return module.MELON
 
 
@@ -62,7 +136,7 @@ def main():
     parser.add_argument("--suite", required=True)
     parser.add_argument("--pair-manifest", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--agent-model", default="deepseek-chat")
+    parser.add_argument("--agent-model", default=AGENT_MODEL)
     parser.add_argument("--embedding-model", default="text-embedding-3-large")
     parser.add_argument("--attack", default="direct")
     parser.add_argument("--max-pairs", type=int, default=0)
@@ -72,13 +146,14 @@ def main():
     from agentdojo.attacks.attack_registry import load_attack
     from agentdojo.task_suite.load_suites import get_suite
 
-    suite = get_suite("v1", args.suite)
+    suite = get_suite(BENCHMARK_VERSION, args.suite)
     pipeline = melon_pipeline(args.agent_model, args.embedding_model)
     attacker = load_attack(args.attack, suite, pipeline)
-    pairs = [tuple(item) for item in json.loads(Path(args.pair_manifest).read_text())]
+    pairs = load_pair_manifest(args.pair_manifest)
     selected = pairs[:args.max_pairs] if args.max_pairs else pairs
     output = Path(args.output)
-    state = {"schema": "agentdojo-melon-v1", "suite": args.suite,
+    state = {"schema": "agentdojo-melon-v2", "suite": args.suite,
+             "benchmark_version": BENCHMARK_VERSION,
              "agent_model": args.agent_model, "embedding_model": args.embedding_model,
              "attack": args.attack, "expected_pairs": len(pairs),
              "benign_by_task": {}, "attacks": []}

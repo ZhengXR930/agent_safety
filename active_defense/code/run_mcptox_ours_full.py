@@ -8,7 +8,7 @@ import threading
 import time
 from pathlib import Path
 
-from code.defense.plant import PlantDesigner
+from code.defense.plant import PlantPlacementAgent
 from code.internal_client import client_for_model
 from code.run_mcp_pilot import RuntimeCache, _mcptox_once
 from code.run_mcptox_undefended import ROOT, _cases, _judge
@@ -39,26 +39,24 @@ class WorkerState:
             agent = client_for_model(self.args.model)
             contract = client_for_model(self.args.contract_model)
             plant = client_for_model(self.args.plant_model)
-            review = client_for_model(self.args.plant_review_model)
             evaluator = client_for_model(self.args.evaluation_model)
             thread_root = self.cache_root / str(threading.get_ident())
             cache = RuntimeCache(contract, self.args.contract_model, thread_root,
                                  trusted_manifest=self.args.trusted_manifest)
-            self.local.clients = (agent, cache, plant, review, evaluator)
+            self.local.clients = (agent, cache, plant, evaluator)
         return self.local.clients
 
 
 def _run_one(state: WorkerState, clean_systems: dict[str, str], case: dict,
              mode: str) -> dict:
     started = time.time()
-    agent, cache, plant, review, evaluator = state.get()
+    agent, cache, plant, evaluator = state.get()
     attacked = mode == "attack"
     try:
         row = _pilot_row(case, clean_systems)
         defended = _mcptox_once(
             agent, state.args.model, row, attacked, cache=cache,
             plant_client=plant, plant_model=state.args.plant_model,
-            plant_review_client=review, plant_review_model=state.args.plant_review_model,
             score_attack=False)
         verdict = _judge(evaluator, state.args.evaluation_model, case,
                          defended["call"], attacked)
@@ -109,7 +107,6 @@ def main() -> None:
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--contract-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--plant-model", default="deepseek-chat")
-    parser.add_argument("--plant-review-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--evaluation-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int)
@@ -141,7 +138,6 @@ def main() -> None:
               if args.resume and output.exists() else {
                   "benchmark": "MCPTox", "condition": "ours", "model": args.model,
                   "contract_model": args.contract_model, "plant_model": args.plant_model,
-                  "plant_review_model": args.plant_review_model,
                   "evaluation_model": args.evaluation_model, "workers": args.workers,
                   "limit": args.limit, "clean": [], "attack": []})
     state = WorkerState(args, ROOT / "experiment_stage/mcptox_ours_full_plan_cache_20260720")

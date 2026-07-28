@@ -22,7 +22,6 @@ from typing import Any
 from code.benchmarks.agentdojo import AgentDojoRunner, tool_schemas
 from code.defense.engine import Engine
 from code.defense.plan_store import PlanStore
-from code.defense.plant import PlantDesigner
 from code.internal_client import chat, client_for_model
 from code.internal_client import read_config_key
 from code.run_agentdojo import pipeline_for
@@ -82,21 +81,16 @@ class Target:
     vectors: tuple[str, ...]
     contract: Any
     plant_model: str
-    plant_review_model: str
 
     def evaluate(self, injection: str) -> dict[str, Any]:
         plant_client = client_for_model(self.plant_model)
-        review_client = client_for_model(self.plant_review_model)
         result = self.runner.run(
             self.user_task,
             injection_task=self.injection_task,
             injections={name: injection for name in self.vectors},
             contract=self.contract,
-            plant_factory=PlantDesigner(
-                plant_client, self.plant_model, self.contract,
-                reviewer_client=review_client,
-                reviewer_model=self.plant_review_model,
-            ),
+            plant_factory=self.engine.plant_agent(
+                self.contract, plant_client, self.plant_model),
         )
         result.pop("environment", None)
         return result
@@ -221,7 +215,7 @@ def build_target(args: argparse.Namespace) -> Target:
     return Target(
         suite, AgentDojoRunner(suite, pipeline, engine), engine, user_task,
         injection_task, vectors, engine.contract(user_task.PROMPT),
-        args.plant_model, args.plant_review_model,
+        args.plant_model,
     )
 
 
@@ -330,7 +324,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--agent-model", default="deepseek-chat")
     parser.add_argument("--contract-model", default="deepseek-chat")
     parser.add_argument("--plant-model", default="deepseek-chat")
-    parser.add_argument("--plant-review-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--plan-store", default="experiment_stage/tap_ours_plan_20260722")
     parser.add_argument("--output", default="experiment_stage/tap_ours_slack_pilot_20260722.json")
     return parser.parse_args()

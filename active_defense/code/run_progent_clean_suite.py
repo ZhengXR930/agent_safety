@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 
+from code.agentdojo_protocol import (AGENT_MODEL, BENCHMARK_VERSION,
+                                     load_pair_manifest)
 from code.run_policy_trajectory_attack import PolicyTarget
 
 
@@ -21,7 +23,7 @@ def _write(path: Path, state: dict) -> None:
 def run(args: argparse.Namespace) -> dict:
     target_args = SimpleNamespace(
         suite=args.suite,
-        defense="progent",
+        defense=args.defense,
         user_task="user_task_0",
         injection_task="injection_task_1",
         agent_model=args.agent_model,
@@ -36,11 +38,14 @@ def run(args: argparse.Namespace) -> dict:
     else:
         state = {
             "config": vars(args),
+            "benchmark_version": BENCHMARK_VERSION,
+            "defense": args.defense,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "records": [],
         }
     completed = {row["user_task"] for row in state["records"]}
-    task_ids = sorted(target.evaluator.suite.user_tasks)
+    task_ids = (sorted({task for task, _ in load_pair_manifest(args.pair_manifest)})
+                if args.pair_manifest else sorted(target.evaluator.suite.user_tasks))
     if args.max_tasks is not None:
         task_ids = task_ids[:args.max_tasks]
     for task_id in task_ids:
@@ -84,13 +89,19 @@ def run(args: argparse.Namespace) -> dict:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--suite", default="slack")
-    parser.add_argument("--agent-model", default="deepseek-chat")
-    parser.add_argument("--policy-model", default="deepseek-chat")
+    parser.add_argument("--defense", choices=("progent", "camel"), default="progent")
+    parser.add_argument("--agent-model", default=AGENT_MODEL)
+    parser.add_argument("--policy-model", default=AGENT_MODEL)
+    parser.add_argument("--pair-manifest",
+                        help="restrict BU to unique benign tasks in the shared pair manifest")
     parser.add_argument(
         "--progent-cache-dir",
         default="baseline/AutoDojo/agentdojo/variant_generation/progent/cache",
     )
-    parser.add_argument("--progent-cache-label", default="openai/gpt-4o")
+    parser.add_argument(
+        "--progent-cache-label",
+        help="cache author model; defaults to --policy-model and must match it",
+    )
     parser.add_argument("--output", required=True)
     parser.add_argument("--max-tasks", type=int)
     parser.add_argument("--resume", action="store_true")

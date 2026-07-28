@@ -67,14 +67,19 @@ class InjecAgentAdapterTests(unittest.TestCase):
             "parameters": [
                 {"name": "to", "type": "string", "required": True},
                 {"name": "body", "type": "string", "required": False},
-            ]}]}]
+            ],
+            "returns": [{"name": "message_id", "type": "string"}]}]}]
         with tempfile.TemporaryDirectory() as root:
             Path(root, "tools.json").write_text(json.dumps(catalog), encoding="utf-8")
             tools = load_tools(root)
         self.assertEqual([{
             "name": "MailSend", "description": "send a message",
             "arguments": ["to", "body"],
+            "output_schema": {"type": "object",
+                              "properties": {"message_id": {"type": "string"}},
+                              "required": ["message_id"]},
             "effect": True,
+            "observation": True,
         }], tool_manifest(tools))
 
     def test_case_parser_handles_nested_json_and_python_literals(self):

@@ -14,6 +14,8 @@ class Decision:
     reason: str = ""
     clause: str | None = None
     evidence: GateResult | None = None
+    plant_events: tuple = field(default_factory=tuple)
+    recovered_arguments: dict = field(default_factory=dict)
 
 
 class Detector:
@@ -23,15 +25,32 @@ class Detector:
     def decide(self, task: str, action: str, arguments: dict,
                evidence: GateResult, plant_events=(), context=()) -> Decision:
         clause = evidence.provenance.clause
+        plant_events = tuple(plant_events or ())
         if plant_events:
-            return Decision("auditor", "PLANT commitment", clause, evidence)
+            return Decision("auditor", "PLANT commitment", clause, evidence,
+                            plant_events)
         if evidence.conflicts:
             return Decision("auditor", "conflict:" + ",".join(evidence.conflicts),
-                            clause, evidence)
+                            clause, evidence, plant_events)
         if evidence.complete:
-            return Decision("pass", clause=clause, evidence=evidence)
-        reason = "unresolved:" + ",".join(evidence.unresolved or ("$control",))
-        return Decision("approval", reason, clause, evidence)
+            return Decision("pass", clause=clause, evidence=evidence,
+                            plant_events=plant_events)
+        unresolved = evidence.unresolved or ("$control",)
+        # Approval may authorize one exact proposal, but unresolved material
+        # copied from an observation must not silently become a new authority
+        # edge.  Clause-local receipt inputs are deterministic evidence of that
+        # origin; route them to deny/recovery unless WRAP first proves the role.
+        provenance_args = evidence.provenance.arguments
+        untrusted = tuple(name for name in unresolved
+                          if name in provenance_args and
+                          provenance_args[name].inputs and
+                          any(source not in {"task", "runtime-context"}
+                              for source in provenance_args[name].sources))
+        if untrusted:
+            return Decision("auditor", "unresolved-untrusted:" +
+                            ",".join(untrusted), clause, evidence, plant_events)
+        reason = "unresolved:" + ",".join(unresolved)
+        return Decision("approval", reason, clause, evidence, plant_events)
 
 
 @dataclass

@@ -60,9 +60,14 @@ class ApiSession:
         )
 
     def ask_json(self, prompt: str) -> dict:
-        parsed = _extract_json(self.ask(prompt))
-        if parsed is None:
-            raise SubagentError("ApiSession: no JSON in response")
+        from code.internal_client import chat
+        full = (self.context + "\n\n" + prompt) if self.context else prompt
+        parsed = _extract_json(chat(
+            self.client, self.model, full, thinking=self.thinking,
+            max_tokens=self.max_tokens,
+            response_format={"type": "json_object"}))
+        if not isinstance(parsed, dict):
+            raise SubagentError("ApiSession: no JSON object in response")
         return parsed
 
 _READY = False

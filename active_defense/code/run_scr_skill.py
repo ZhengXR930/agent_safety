@@ -12,6 +12,8 @@ from code.internal_client import client_for_model
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--skills-dir", required=True)
+    parser.add_argument("--capability-manifest", required=True,
+                        help="operator-attested JSON list with explicit effect/observation facts")
     parser.add_argument("--turn", action="append", required=True,
                         help="original trusted user turn; repeat to preserve interaction boundaries")
     parser.add_argument("--model", default="gpt-5.5-2026-04-24")
@@ -19,7 +21,9 @@ def main():
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
     client = client_for_model(args.model)
-    result = SkillRuntime(args.skills_dir, client, args.model).run(
+    capability_manifest = json.loads(
+        Path(args.capability_manifest).read_text(encoding="utf-8"))
+    result = SkillRuntime(args.skills_dir, client, args.model, capability_manifest).run(
         args.turn, plant=not args.no_plant)
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)

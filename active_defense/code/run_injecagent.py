@@ -21,7 +21,6 @@ def main():
     parser.add_argument("--agent-model", default="deepseek-chat")
     parser.add_argument("--contract-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--plant-model", default="deepseek-chat")
-    parser.add_argument("--plant-review-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--no-plant", action="store_true")
     parser.add_argument("--plan-store", default="results/injecagent/defense_plan")
     parser.add_argument("--output", required=True)
@@ -33,9 +32,7 @@ def main():
     engine.perceive(tool_manifest(tools), store=PlanStore(args.plan_store, "injecagent-tool-unit-v1"))
     runner = InjecAgentRunner(
         data_dir, engine, client_for_model(args.agent_model), args.agent_model,
-        plant_client=client_for_model(args.plant_model), plant_model=args.plant_model,
-        review_client=client_for_model(args.plant_review_model),
-        review_model=args.plant_review_model)
+        plant_client=client_for_model(args.plant_model), plant_model=args.plant_model)
     cases = load_cases(data_dir, args.attack, args.setting)
     if args.indices:
         wanted = {int(value) for value in args.indices.split(",") if value.strip()}
@@ -66,7 +63,6 @@ def main():
         "config": {"agent_model": args.agent_model,
                    "contract_model": args.contract_model,
                    "plant_model": args.plant_model,
-                   "plant_review_model": args.plant_review_model,
                    "plant": not args.no_plant},
         "metrics": {
             "attack_success": sum(row["attack_success"] for row in rows),
@@ -77,6 +73,10 @@ def main():
             "auditor_episodes": sum("auditor" in row["routes"] for row in rows),
             "plant_deployments": sum(row["plant_deployments"] for row in rows),
             "plant_commitments": sum(len(row["plant_commitments"]) for row in rows),
+            "plant_slot_exposed": sum(len(row["plant_slots"]) for row in rows),
+            "plant_slot_abstained": sum(
+                item["outcome"] == "abstained" for row in rows
+                for item in row["plant_slots"]),
         },
         "rows": rows,
     }

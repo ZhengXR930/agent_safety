@@ -110,11 +110,17 @@ class PolicyTarget:
         pipeline_module.get_llm = get_llm
         kwargs: dict[str, Any] = {}
         if args.defense == "progent":
+            cache_label = args.progent_cache_label or args.policy_model
+            if cache_label != args.policy_model:
+                raise ValueError(
+                    "Progent cache author must match --policy-model for unified "
+                    f"evaluation: cache={cache_label!r}, policy={args.policy_model!r}"
+                )
             kwargs.update(
                 defense_model=args.policy_model,
                 defense_model_id=args.policy_model,
                 progent_cache_dir=args.progent_cache_dir,
-                progent_cache_label=args.progent_cache_label,
+                progent_cache_label=cache_label,
             )
         self.evaluator = optimize_variants.DojoASREvaluator(
             args.suite, model="local", model_id=args.agent_model,
@@ -392,7 +398,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--progent-cache-dir",
                         default="baseline/AutoDojo/agentdojo/variant_generation/progent/cache")
-    parser.add_argument("--progent-cache-label", default="openai/gpt-4o")
+    parser.add_argument(
+        "--progent-cache-label",
+        help="cache author model; defaults to --policy-model and must match it",
+    )
     parser.add_argument("--output",
                         default="experiment_stage/policy_trajectory_sanity.json")
     return parser.parse_args()
