@@ -10,6 +10,18 @@ class AgentRoleError(RuntimeError):
     """An Agent run ended without one deterministically valid proposal."""
 
 
+def typed_tool(name: str, description: str, properties: dict,
+               required=()) -> dict:
+    """Build the single submission tool shared by every defender Agent."""
+    return {"type": "function", "function": {
+        "name": str(name), "description": str(description),
+        "parameters": {
+            "type": "object", "properties": dict(properties),
+            "required": list(required), "additionalProperties": False,
+        },
+    }}
+
+
 def run_typed_agent(*, name: str, model: str, prompt: str,
                     tool_schema: dict, instructions: str = "",
                     validator=None, timeout_seconds: float = 120.0
@@ -20,7 +32,7 @@ def run_typed_agent(*, name: str, model: str, prompt: str,
     There is no second request, direct-API fallback, or partial result.
     """
     from agents import (Agent, FunctionTool, ModelSettings, Runner,
-                        set_tracing_disabled)
+                        ToolsToFinalOutputResult, set_tracing_disabled)
     from code.internal_client import _NO_TEMP, agent_sdk_model
 
     function = dict(tool_schema.get("function") or {})
@@ -78,6 +90,14 @@ def run_typed_agent(*, name: str, model: str, prompt: str,
         tool_name + " until its deterministic validator returns accepted=true, "
         "then finish. Do not use any alternative output path."
     ).strip()
+    def finish_on_valid_submission(_context, _tool_results):
+        # A validator rejection stays in the same Agent session. Once accepted,
+        # the typed proposal itself is the final output; asking the model for a
+        # ceremonial "done" turn wastes one provider request.
+        return ToolsToFinalOutputResult(
+            is_final_output=bool(accepted),
+            final_output="accepted" if accepted else None)
+
     agent = Agent(
         name=name,
         instructions=role_instructions,
@@ -86,7 +106,7 @@ def run_typed_agent(*, name: str, model: str, prompt: str,
         model_settings=ModelSettings(
             temperature=None if model in _NO_TEMP else 0.0,
             tool_choice="auto"),
-        tool_use_behavior="run_llm_again",
+        tool_use_behavior=finish_on_valid_submission,
     )
     set_tracing_disabled(True)
 
@@ -95,33 +115,36 @@ def run_typed_agent(*, name: str, model: str, prompt: str,
             Runner.run(agent, prompt, max_turns=6),
             timeout=max(1.0, float(timeout_seconds)))
 
+    run_result = {}
     try:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(execute())
+            run_result["value"] = asyncio.run(execute())
         else:
             # Tool mediation may be invoked synchronously from an async target
             # Agent callback. Run the one semantic Agent session on a private
             # loop instead of nesting asyncio.run in the caller's loop.
-            result = {}
-
             def run_private_loop():
                 try:
-                    asyncio.run(execute())
+                    run_result["value"] = asyncio.run(execute())
                 except BaseException as exc:  # re-raised in caller thread
-                    result["error"] = exc
+                    run_result["error"] = exc
 
             worker = threading.Thread(target=run_private_loop, daemon=True)
             worker.start()
             worker.join()
-            if "error" in result:
-                raise result["error"]
+            if "error" in run_result:
+                raise run_result["error"]
     except Exception as exc:
         raise AgentRoleError(type(exc).__name__ + ":" + str(exc)[:240]) from exc
     if len(accepted) != 1:
         raise AgentRoleError("valid_submission_count:" + str(len(accepted)))
+    sdk_result = run_result.get("value")
+    model_requests = len(getattr(sdk_result, "raw_responses", ()) or ())
     return accepted[0], [{
         "run": 1, "ok": True, "transport": "openai-agents-sdk",
+        "model_requests": model_requests,
+        "tool_submissions": 1 + len(feedback),
         "validator_rejections": feedback,
     }]

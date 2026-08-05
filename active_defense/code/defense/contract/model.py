@@ -1,13 +1,10 @@
-"""Explicit task-time Contract program.
-
-The four Clause classes are the only core representation.  Compatibility with
-older field-combination JSON lives in :mod:`legacy`, never in runtime logic.
-"""
+"""Explicit task-time Contract program with exactly four Clause variants."""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 
 
 _CLAUSE_REF = re.compile(r"^c[0-9]+\.[^.]+$")
@@ -18,7 +15,8 @@ def is_clause_ref(value) -> bool:
 
 
 def spec_sources(spec) -> tuple[str, ...]:
-    if not isinstance(spec, dict) or set(spec) != {"from"}:
+    if (not isinstance(spec, dict) or
+            set(spec) not in ({"from"}, {"from", "delegated"})):
         return ()
     value = spec["from"]
     values = (value,) if isinstance(value, str) else tuple(value or ())
@@ -41,42 +39,7 @@ class ClauseKind(str, Enum):
 
 
 @dataclass(frozen=True)
-class DelegationGrant:
-    """User-authorized runtime content may define a recursive Child Task.
-
-    This is authority metadata over the four-Clause program, never a fifth
-    Clause.  Optional effect_clause_id narrows a legacy grant to one Effect.
-    """
-    source_ref: str
-    effect_clause_id: str = ""
-
-    def to_dict(self) -> dict:
-        data = {"from": self.source_ref}
-        if self.effect_clause_id:
-            data["to"] = self.effect_clause_id
-        return data
-
-
-@dataclass(frozen=True)
-class Effect:
-    """Compatibility view of an EffectClause for existing gate consumers."""
-    action: str = ""
-    arguments: dict = field(default_factory=dict)
-
-    def to_dict(self) -> dict:
-        return {"action": self.action, "arguments": dict(self.arguments)}
-
-
-class _ClauseMeta(type):
-    def __call__(cls, *args, **kwargs):
-        if cls is Clause:
-            from .legacy import clause_from_legacy_fields
-            return clause_from_legacy_fields(*args, **kwargs)
-        return super().__call__(*args, **kwargs)
-
-
-@dataclass(frozen=True)
-class Clause(metaclass=_ClauseMeta):
+class Clause:
     """Base type for exactly four explicit Clause variants."""
     id: str
     instruction: str
@@ -105,10 +68,6 @@ class Clause(metaclass=_ClauseMeta):
     def relation(self) -> str | None:
         return None
 
-    @property
-    def effect(self) -> Effect | None:
-        return None
-
     def with_id(self, clause_id: str) -> "Clause":
         raise NotImplementedError
 
@@ -121,6 +80,7 @@ class AcquireClause(Clause):
     capability: str
     call_arguments: dict
     output_name: str
+    quantified: bool = False
 
     @property
     def kind(self): return ClauseKind.ACQUIRE
@@ -134,18 +94,25 @@ class AcquireClause(Clause):
 
     def with_id(self, clause_id):
         return AcquireClause(str(clause_id), self.instruction, self.capability,
-                             dict(self.call_arguments), self.output_name)
+                             dict(self.call_arguments), self.output_name,
+                             self.quantified)
 
     def to_dict(self):
-        return {"id": self.id, "type": self.kind.value,
-                "instruction": self.instruction, "capability": self.capability,
-                "arguments": dict(self.call_arguments), "output": self.output_name}
+        value = {"id": self.id, "type": self.kind.value,
+                 "instruction": self.instruction,
+                 "capability": self.capability,
+                 "arguments": dict(self.call_arguments),
+                 "output": self.output_name}
+        if self.quantified:
+            value["quantified"] = True
+        return value
 
 
 @dataclass(frozen=True)
 class DeriveClause(Clause):
     input_refs: tuple[str, ...]
     output_name: str
+    quantified: bool = False
 
     @property
     def kind(self): return ClauseKind.DERIVE
@@ -156,18 +123,22 @@ class DeriveClause(Clause):
 
     def with_id(self, clause_id):
         return DeriveClause(str(clause_id), self.instruction,
-                            tuple(self.input_refs), self.output_name)
+                            tuple(self.input_refs), self.output_name,
+                            self.quantified)
 
     def to_dict(self):
-        return {"id": self.id, "type": self.kind.value,
-                "instruction": self.instruction, "from": list(self.input_refs),
-                "output": self.output_name}
+        value = {"id": self.id, "type": self.kind.value,
+                 "instruction": self.instruction, "from": list(self.input_refs),
+                 "output": self.output_name}
+        if self.quantified:
+            value["quantified"] = True
+        return value
 
 
 @dataclass(frozen=True)
 class ConditionalClause(Clause):
     operator: str
-    operand_refs: tuple[str, ...]
+    operands: tuple
     output_name: str
 
     @property
@@ -175,18 +146,25 @@ class ConditionalClause(Clause):
     @property
     def output(self): return self.output_name
     @property
+    def operand_refs(self):
+        return tuple(item for item in self.operands if is_clause_ref(item))
+    @property
     def sources(self): return list(self.operand_refs)
     @property
-    def relation(self): return f"{self.operator}({','.join(self.operand_refs)})"
+    def relation(self):
+        encoded = [item if isinstance(item, str) else
+                   json.dumps(item, ensure_ascii=False, sort_keys=True)
+                   for item in self.operands]
+        return f"{self.operator}({','.join(encoded)})"
 
     def with_id(self, clause_id):
         return ConditionalClause(str(clause_id), self.instruction, self.operator,
-                                 tuple(self.operand_refs), self.output_name)
+                                 tuple(self.operands), self.output_name)
 
     def to_dict(self):
         return {"id": self.id, "type": self.kind.value,
                 "instruction": self.instruction, "operator": self.operator,
-                "operands": list(self.operand_refs), "output": self.output_name}
+                "operands": list(self.operands), "output": self.output_name}
 
 
 @dataclass(frozen=True)
@@ -200,9 +178,6 @@ class EffectClause(Clause):
     def arguments(self): return self.effect_arguments
     @property
     def sources(self): return list(argument_sources(self.effect_arguments))
-    @property
-    def effect(self): return Effect(self.action, dict(self.effect_arguments))
-
     def with_id(self, clause_id):
         return EffectClause(str(clause_id), self.instruction, self.action,
                             dict(self.effect_arguments))
@@ -217,30 +192,21 @@ class EffectClause(Clause):
 class TaskContract:
     task: str = ""
     clauses: list[Clause] = field(default_factory=list)
-    delegations: list[DelegationGrant] = field(default_factory=list)
 
     def __post_init__(self):
         self.clauses = [clause.with_id(f"c{index}")
                         for index, clause in enumerate(self.clauses)]
 
     def to_dict(self) -> dict:
-        data = {"task": self.task,
+        return {"task": self.task,
                 "clauses": [clause.to_dict() for clause in self.clauses]}
-        if self.delegations:
-            data["delegations"] = [grant.to_dict() for grant in self.delegations]
-        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "TaskContract":
+        if not isinstance(data, dict) or set(data) != {"task", "clauses"}:
+            return cls(str((data or {}).get("task", ""))
+                       if isinstance(data, dict) else "", [])
         rows = (data or {}).get("clauses") or []
-        # The legacy decoder is a migration boundary, not an error-recovery
-        # path for malformed v2. Once any row declares type, the whole payload
-        # is v2 and invalid rows must remain invalid/fail closed.
-        has_explicit_type = any(isinstance(row, dict) and "type" in row
-                                for row in rows)
-        if rows and not has_explicit_type:
-            from .legacy import contract_from_legacy_dict
-            return contract_from_legacy_dict(data)
         explicit_fields = {
             ClauseKind.ACQUIRE.value: {
                 "id", "type", "instruction", "capability", "arguments", "output"},
@@ -251,10 +217,16 @@ class TaskContract:
             ClauseKind.EFFECT.value: {
                 "id", "type", "instruction", "action", "arguments"},
         }
-        if has_explicit_type and any(
+        if rows and any(
                 not isinstance(row, dict) or
                 row.get("type") not in explicit_fields or
-                set(row) != explicit_fields[row["type"]]
+                set(row) not in (
+                    explicit_fields[row["type"]],
+                    (explicit_fields[row["type"]] | {"quantified"})
+                    if row["type"] in {
+                        ClauseKind.ACQUIRE.value,
+                        ClauseKind.DERIVE.value,
+                    } else set())
                 for row in rows):
             return cls(str((data or {}).get("task", "")), [])
         clauses = []
@@ -267,24 +239,20 @@ class TaskContract:
             if kind == ClauseKind.ACQUIRE.value:
                 clauses.append(AcquireClause(
                     clause_id, instruction, str(raw.get("capability", "")),
-                    dict(raw.get("arguments") or {}), str(raw.get("output", ""))))
+                    dict(raw.get("arguments") or {}), str(raw.get("output", "")),
+                    raw.get("quantified") is True))
             elif kind == ClauseKind.DERIVE.value:
                 clauses.append(DeriveClause(
                     clause_id, instruction, tuple(map(str, raw.get("from") or ())),
-                    str(raw.get("output", ""))))
+                    str(raw.get("output", "")),
+                    raw.get("quantified") is True))
             elif kind == ClauseKind.CONDITIONAL.value:
                 clauses.append(ConditionalClause(
                     clause_id, instruction, str(raw.get("operator", "")),
-                    tuple(map(str, raw.get("operands") or ())),
+                    tuple(raw.get("operands") or ()),
                     str(raw.get("output", ""))))
             elif kind == ClauseKind.EFFECT.value:
                 clauses.append(EffectClause(
                     clause_id, instruction, str(raw.get("action", "")),
                     dict(raw.get("arguments") or {})))
-        delegations = []
-        for raw in (data or {}).get("delegations") or ():
-            if (isinstance(raw, dict) and "from" in raw and
-                    set(raw).issubset({"from", "to"})):
-                delegations.append(DelegationGrant(
-                    str(raw["from"]), str(raw.get("to", ""))))
-        return cls(str((data or {}).get("task", "")), clauses, delegations)
+        return cls(str((data or {}).get("task", "")), clauses)

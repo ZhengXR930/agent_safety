@@ -5,9 +5,13 @@ from .model import is_clause_ref
 
 
 OPERATOR_ARITY = {
-    "identity": 1, "singleton": 1, "count": 1, "union": 1,
+    "identity": 1, "singleton": 1, "count": 1, "map_count": 1,
+    "union": 1,
     "difference": 2, "argmin": 2, "argmax": 2,
-    "basename": 1, "path_join": 2,
+    "aligned_lookup": 3,
+    "basename": 1, "path_join": 2, "gt": 3, "lt": 3,
+    "field": 2, "select_eq": 3, "add": 2,
+    "datetime_combine": 2, "add_duration": 2, "interval_free": 3,
 }
 
 
@@ -26,13 +30,14 @@ def normalize_contract(data):
         return aliases.get(value, value) if isinstance(value, str) else value
 
     def spec(value):
-        if not isinstance(value, dict) or set(value) != {"from"}:
+        if (not isinstance(value, dict) or
+                set(value) not in ({"from"}, {"from", "delegated"})):
             return value
         origins = value["from"]
         if isinstance(origins, str):
-            return {"from": ref(origins)}
+            return {**value, "from": ref(origins)}
         if isinstance(origins, list):
-            return {"from": [ref(item) for item in origins]}
+            return {**value, "from": [ref(item) for item in origins]}
         return value
 
     clauses = []
@@ -48,22 +53,20 @@ def normalize_contract(data):
         if isinstance(clause.get("from"), list):
             clause["from"] = [ref(item) for item in clause["from"]]
         if isinstance(clause.get("operands"), list):
-            clause["operands"] = [ref(item) for item in clause["operands"]]
+            clause["operands"] = [ref(item) if isinstance(item, str) else item
+                                  for item in clause["operands"]]
         clauses.append(clause)
-    normalized = {"task": data.get("task", ""), "clauses": clauses}
-    if "delegations" in data:
-        normalized["delegations"] = data.get("delegations")
-    return normalized
+    return {"task": data.get("task", ""), "clauses": clauses}
 
 
 def validate_contract(data, trusted_task, actions, environment_sources,
                       allowed_args, required_args=None,
-                      effect_return_actions=None, observation_actions=None):
+                      effect_return_actions=None, observation_actions=None,
+                      argument_schemas=None, output_schemas=None):
     if not isinstance(data, dict):
         return ["contract is not an object"]
     errors = []
-    if set(data) not in ({"task", "clauses"},
-                         {"task", "clauses", "delegations"}):
+    if set(data) != {"task", "clauses"}:
         errors.append("contract fields mismatch")
     if data.get("task") != trusted_task:
         errors.append("task mismatch")
@@ -76,20 +79,63 @@ def validate_contract(data, trusted_task, actions, environment_sources,
     effect_return_actions = set(effect_return_actions or ())
     observation_actions = set(observation_actions or allowed_args)
     required_args = required_args or {}
+    argument_schemas = argument_schemas or {}
+    output_schemas = output_schemas or {}
     prior_effects = {}
-    acquire_outputs = set()
-    effect_ids = set()
+
+    def runtime_arguments(arguments):
+        """Remove Contract-only metadata before effect-return call matching."""
+        return {
+            name: ({"from": spec["from"]}
+                   if isinstance(spec, dict) and
+                   set(spec) == {"from", "delegated"} else spec)
+            for name, spec in dict(arguments or {}).items()
+        }
+
+    def schema_fields(value):
+        fields = set()
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                fields.update(map(str, properties))
+            for child in value.values():
+                fields.update(schema_fields(child))
+        elif isinstance(value, list):
+            for child in value:
+                fields.update(schema_fields(child))
+        return fields
+
+    attested_fields = set()
+    for schema in output_schemas.values():
+        attested_fields.update(schema_fields(schema))
+
+    def task_literal(value) -> bool:
+        if isinstance(value, str) and value:
+            return value.casefold() in trusted_task.casefold()
+        if isinstance(value, bool) or value is None:
+            return False
+        if isinstance(value, (int, float)):
+            import re
+            return re.search(
+                r"(?<![\w.])" + re.escape(str(value)) + r"(?![\w.])",
+                trusted_task) is not None
+        return False
 
     def output_valid(value):
         return isinstance(value, str) and bool(value) and "." not in value
 
-    def references(spec, prefix):
-        if not isinstance(spec, dict) or len(spec) != 1:
+    def references(spec, prefix, *, effect=False):
+        fields = set(spec) if isinstance(spec, dict) else set()
+        if fields == {"from", "delegated"}:
+            if not effect or spec.get("delegated") is not True:
+                errors.append(prefix + " invalid delegation")
+                return ()
+        elif fields not in ({"literal"}, {"from"}):
             errors.append(prefix + " argument must be exactly literal or from")
             return ()
         if set(spec) == {"literal"}:
             return ()
-        if set(spec) != {"from"}:
+        if "from" not in spec:
             errors.append(prefix + " argument must be exactly literal or from")
             return ()
         raw = spec["from"]
@@ -113,7 +159,11 @@ def validate_contract(data, trusted_task, actions, environment_sources,
             errors.append(prefix + " is not an object")
             continue
         kind = raw.get("type")
-        if kind not in fields or set(raw) != fields.get(kind):
+        allowed_fields = fields.get(kind)
+        if (kind in {"acquire", "derive"} and
+                set(raw) == fields[kind] | {"quantified"}):
+            allowed_fields = set(raw)
+        if kind not in fields or set(raw) != allowed_fields:
             errors.append(prefix + " fields mismatch")
             continue
         if raw.get("id") != f"c{index}":
@@ -122,6 +172,8 @@ def validate_contract(data, trusted_task, actions, environment_sources,
             errors.append(prefix + " invalid instruction")
 
         if kind == "derive":
+            if "quantified" in raw and raw.get("quantified") is not True:
+                errors.append(prefix + " quantified must be true when present")
             inputs = raw.get("from")
             if (not isinstance(inputs, list) or not inputs or
                     any(not isinstance(ref, str) or ref not in available
@@ -137,10 +189,29 @@ def validate_contract(data, trusted_task, actions, environment_sources,
         if kind == "conditional":
             operator, operands = raw.get("operator"), raw.get("operands")
             arity = OPERATOR_ARITY.get(operator)
+            valid_operands = True
+            if isinstance(operands, list):
+                for position, operand in enumerate(operands):
+                    if (isinstance(operand, str) and operand in available and
+                            is_clause_ref(operand)):
+                        continue
+                    if not (isinstance(operand, dict) and
+                            set(operand) == {"literal"}):
+                        valid_operands = False
+                        continue
+                    literal = operand["literal"]
+                    field_position = (
+                        (operator == "field" and position == 1) or
+                        (operator == "select_eq" and position == 1))
+                    if field_position:
+                        valid_operands &= (
+                            isinstance(literal, str) and
+                            literal in attested_fields)
+                    else:
+                        valid_operands &= task_literal(literal)
             if (arity is None or not isinstance(operands, list) or
                     len(operands) != arity or
-                    any(not isinstance(ref, str) or ref not in available or
-                        not is_clause_ref(ref) for ref in operands) or
+                    not valid_operands or
                     (operator in {"argmin", "argmax"} and
                      len(operands) == 2 and operands[0] == operands[1])):
                 errors.append(prefix + " invalid conditional")
@@ -155,8 +226,18 @@ def validate_contract(data, trusted_task, actions, environment_sources,
         if not isinstance(arguments, dict):
             errors.append(prefix + " invalid arguments")
             continue
+        if kind == "acquire" and raw.get("quantified") is True:
+            axes = [value for value in arguments.values()
+                    if isinstance(value, dict) and set(value) == {"from"}]
+            if (len(axes) != 1 or
+                    not isinstance(axes[0].get("from"), str)):
+                errors.append(
+                    prefix + " quantified Acquire needs exactly one scalar "
+                    "from axis")
         name = raw.get("capability") if kind == "acquire" else raw.get("action")
         if kind == "acquire":
+            if "quantified" in raw and raw.get("quantified") is not True:
+                errors.append(prefix + " quantified must be true when present")
             if name not in observation_actions:
                 errors.append(prefix + " unknown observation capability")
         elif name not in actions:
@@ -170,7 +251,31 @@ def validate_contract(data, trusted_task, actions, environment_sources,
                           ",".join(sorted(missing)))
         role_uses = {}
         for argument, value in arguments.items():
-            refs = references(value, prefix + "." + str(argument))
+            refs = references(value, prefix + "." + str(argument),
+                              effect=(kind == "effect"))
+            if isinstance(value, dict) and set(value) == {"literal"}:
+                literal = value["literal"]
+                schema = argument_schemas.get(name, {}).get(argument, {})
+                if "const" in schema and literal != schema["const"]:
+                    errors.append(prefix + "." + str(argument) +
+                                  " literal violates operator const")
+                enum = schema.get("enum")
+                if isinstance(enum, list) and literal not in enum:
+                    errors.append(prefix + "." + str(argument) +
+                                  " literal violates operator enum")
+                operator_fixed = (
+                    ("const" in schema and literal == schema["const"]) or
+                    ("default" in schema and literal == schema["default"]))
+                if schema.get("x-task-derived") is True:
+                    errors.append(
+                        prefix + "." + str(argument) +
+                        " is operator-attested task-derived; use a Derive role")
+                if (isinstance(literal, str) and not operator_fixed and
+                        literal not in trusted_task):
+                    errors.append(
+                        prefix + "." + str(argument) +
+                        " string literal is not an exact trusted-task value; "
+                        "bind a task-derived role instead")
             if kind == "effect":
                 for ref in refs:
                     if is_clause_ref(ref):
@@ -187,34 +292,13 @@ def validate_contract(data, trusted_task, actions, environment_sources,
                 errors.append(prefix + " invalid output")
             else:
                 available.add(f"c{index}.{output}")
-                acquire_outputs.add(f"c{index}.{output}")
             if (name in effect_return_actions and
-                    arguments not in prior_effects.get(name, ())):
+                    runtime_arguments(arguments) not in
+                    prior_effects.get(name, ())):
                 errors.append(prefix + " effect-return Acquire must be immediately preceded by an Effect Clause for the same capability with byte-for-byte identical arguments; insert the Effect, not another Acquire")
         elif name in actions:
-            prior_effects.setdefault(name, []).append(arguments)
-            effect_ids.add(f"c{index}")
-    delegations = data.get("delegations", [])
-    if not isinstance(delegations, list):
-        errors.append("delegations is not a list")
-    else:
-        seen_delegations = set()
-        for index, raw in enumerate(delegations):
-            prefix = f"delegation[{index}]"
-            if (not isinstance(raw, dict) or "from" not in raw or
-                    not set(raw).issubset({"from", "to"}) or
-                    not isinstance(raw.get("from"), str) or
-                    ("to" in raw and not isinstance(raw.get("to"), str))):
-                errors.append(prefix + " fields mismatch")
-                continue
-            edge = (raw["from"], raw.get("to", ""))
-            if edge in seen_delegations:
-                errors.append(prefix + " duplicate edge")
-            seen_delegations.add(edge)
-            if raw["from"] not in acquire_outputs:
-                errors.append(prefix + " source must be an Acquire output")
-            if raw.get("to") and raw["to"] not in effect_ids:
-                errors.append(prefix + " target must be an existing Effect Clause")
+            prior_effects.setdefault(name, []).append(
+                runtime_arguments(arguments))
     return errors
 
 
@@ -226,6 +310,13 @@ def task_contract_tool_schema():
             {"type": "string"}, {"type": "array", "items": {"type": "string"},
                                 "minItems": 1}]}},
          "required": ["from"], "additionalProperties": False},
+        {"type": "object", "properties": {
+            "from": {"oneOf": [
+                {"type": "string"},
+                {"type": "array", "items": {"type": "string"},
+                 "minItems": 1}]},
+            "delegated": {"type": "boolean", "const": True}},
+         "required": ["from", "delegated"], "additionalProperties": False},
     ]}
     arguments = {"type": "object", "additionalProperties": argument}
     common = {"id": {"type": "string"}, "instruction": {"type": "string"}}
@@ -238,16 +329,25 @@ def task_contract_tool_schema():
 
     clause = {"oneOf": [
         variant("acquire", {"capability": {"type": "string"},
-                            "arguments": arguments, "output": {"type": "string"}},
+                            "arguments": arguments,
+                            "output": {"type": "string"},
+                            "quantified": {"type": "boolean", "const": True}},
                 ["capability", "arguments", "output"]),
         variant("derive", {"from": {"type": "array",
                                      "items": {"type": "string"}, "minItems": 1},
-                           "output": {"type": "string"}}, ["from", "output"]),
+                           "output": {"type": "string"},
+                           "quantified": {"type": "boolean", "const": True}},
+                ["from", "output"]),
         variant("conditional", {"operator": {"type": "string",
                                                "enum": list(OPERATOR_ARITY)},
                                 "operands": {"type": "array",
-                                             "items": {"type": "string"},
-                                             "minItems": 1, "maxItems": 2},
+                                             "items": {"oneOf": [
+                                                 {"type": "string"},
+                                                 {"type": "object",
+                                                  "properties": {"literal": {}},
+                                                  "required": ["literal"],
+                                                  "additionalProperties": False}]},
+                                             "minItems": 1, "maxItems": 3},
                                 "output": {"type": "string"}},
                 ["operator", "operands", "output"]),
         variant("effect", {"action": {"type": "string"},
@@ -258,9 +358,5 @@ def task_contract_tool_schema():
         "description": "Return one explicit validated TaskContract candidate.",
         "parameters": {"type": "object", "properties": {
             "task": {"type": "string"},
-            "clauses": {"type": "array", "items": clause},
-            "delegations": {"type": "array", "items": {
-                "type": "object", "properties": {
-                    "from": {"type": "string"}, "to": {"type": "string"}},
-                "required": ["from"], "additionalProperties": False}}},
+            "clauses": {"type": "array", "items": clause}},
             "required": ["task", "clauses"], "additionalProperties": False}}}

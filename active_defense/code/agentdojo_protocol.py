@@ -52,14 +52,19 @@ def contracts_digest(contracts: dict) -> str:
 def load_frozen_contracts(path: str | Path) -> tuple[dict, dict]:
     """Load a frozen bundle and reject silent Contract edits."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(raw, dict) and raw.get("schema") == "frozen-contract-bundle-v1":
+    if (isinstance(raw, dict) and isinstance(raw.get("contracts"), dict)
+            and "contracts_sha256" in raw):
         contracts = raw.get("contracts")
-        if not isinstance(contracts, dict):
-            raise ValueError("frozen Contract bundle has no contracts mapping")
         actual = contracts_digest(contracts)
         if raw.get("contracts_sha256") != actual:
             raise ValueError("frozen Contract bundle hash mismatch")
         return contracts, raw
+    if (isinstance(raw, dict) and raw.get("schema") == "agentdojo-lean-full-v1"
+            and isinstance(raw.get("contracts"), dict)):
+        # A checkpoint is itself a frozen view of the exact Contracts used by
+        # its completed episodes.  Reusing that view must not accidentally
+        # treat config/results metadata as task ids.
+        return raw["contracts"], raw
     if not isinstance(raw, dict):
         raise ValueError("Contract file must be a mapping or frozen bundle")
     return raw, {"schema": "legacy-contract-mapping", "contracts_sha256": contracts_digest(raw)}

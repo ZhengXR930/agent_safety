@@ -18,9 +18,11 @@ Each clause contains one trusted local instruction $i_k$ and named sources $S_k$
 produces one semantically named output $o_k$ (for example `c0.channel`); an effect clause authorizes one
 mediated action $a_k$ with arguments $A_k$. Argument constraints are only `literal(v)`, `from(source)`
 (one or several sources), or `unknown`. Anonymous variables, a separate relation table, numeric relation
-indices, and a Contract-level free-text type are absent. Open-prose positions and their active
-substrate resolver grammars are instead one task-independent capability-schema map (`interprets`), not a
-Contractor decision. When the trusted request explicitly entails a
+indices, and a Contract-level free-text type are absent. The trusted capability manifest instead declares
+`argument_types` and `output_types`. These types select task-independent parsing and comparison only:
+`natural_language` activates registered URL/email/mention parsers, while `code`, `path`, `opaque`, `url`,
+and `email` retain their own deterministic syntax. A type never grants authority or predicts a task value.
+When the trusted request explicitly entails a
 closed deterministic relation, a derivation Clause may additionally carry one expression
 
 $$e_k ::= identity(s)\mid count(s)\mid union(s)\mid argmin(s_1,s_2)\mid
@@ -122,8 +124,11 @@ not part of the core WRAP guarantee.
 For MCP, the trusted manifest is compiled once at operator-approved server registration or installation,
 after protocol initialization and capability discovery. The compiler may consume the complete advertised
 `tools/list` JSON Schema and persists the compact `EnvironmentPlan` fields: `name`, `description`,
-`arguments`, `required_arguments`, `interprets`, `effect`, `observation`, and the advertised `output_schema`
-when one exists. The output schema is trusted only as an operator/substrate-attested return-shape assumption:
+`arguments`, `required_arguments`, `argument_types`, `output_types`, `receipt_role`, `effect`, `observation`,
+and the advertised `output_schema` when one exists. `receipt_role` is one of `data`, `advisory`, or `control`
+and defaults to `data`; `advisory` contributes no authority, while `control` can introduce authority only
+through an exact task-, episode-, action-, and argument-scoped runtime receipt. The output schema is trusted
+only as an operator/substrate-attested return-shape assumption:
 a successful value that violates it remains observable but cannot become WRAP authority. It certifies fields,
 types, and container shape—not that a field is semantically the task's “latest”, “best”, or intended object;
 such a claim still requires an explicit task relation and sufficient receipts. A missing output schema therefore
@@ -195,10 +200,11 @@ benchmark-specific predicate or executor.
 as deterministic, task-independent canonicalization rather than an LLM equivalence judgment. A mismatch
 is a conflict, so a semantic model cannot silently change an identity or destination.
 
-For a manifest-declared open-prose position, WRAP does not bind the generated prose to a canonical receipt
-value and does not ask a Judge whether it is faithful, relevant, or harmless. The manifest maps that
-argument to the versioned, side-effect-free resolver grammars the substrate itself applies. An empty grammar
-list attests inert prose. For every active grammar, WRAP invokes the registered substrate parser/resolver and
+For a manifest-declared `natural_language` position, WRAP does not bind the generated prose to a canonical
+receipt value and does not ask a Judge whether it is faithful, relevant, or harmless. The argument type
+selects the versioned, side-effect-free authority-atom parsers the substrate applies. `code`, `path`, and
+`opaque` positions do not run natural-language regexes merely because their strings contain punctuation.
+For every active grammar, WRAP invokes the registered substrate parser/resolver and
 binds its canonical entity—not its display spelling—to the trusted task or a Clause-reachable receipt:
 
 $$
@@ -267,9 +273,36 @@ the next persisted plan but never lets attacker-controlled runtime content widen
 PLANT is independent of this receipt system. For each successful observation, the adapter first stores the
 canonical unmodified return in WRAP's sidecar, then exposes a separately decorated view to the Agent.
 Relations always consume canonical values, so honey decoration cannot become WRAP authority. PLANT and WRAP
-produce independent evidence on the complete proposal; the Decision retains both. Any PLANT commitment or
-definite WRAP conflict routes to Auditor, incomplete WRAP evidence routes to Approval, and only complete WRAP
-evidence with no PLANT commitment passes. Absence of a PLANT hit never authorizes.
+produce independent evidence on the complete proposal; the Decision retains both. Observation markers that
+reach an Effect/final-response sink and exact substrate identities that are really invoked are gating
+commitments. A dependency decoy presented as proof is non-gating evidence: WRAP independently decides whether
+the Effect has sufficient authority. Absence of a PLANT hit never authorizes.
+
+A dependency carrier is runtime mediated and discovered from execution, not declared by a benchmark adapter.
+Whenever an active Receipt is actually transferred from one execution unit to another, Runtime automatically
+creates an episode-local carrier bound to the exact Receipt digest and consumer identity. The adapter reports
+only the factual consumer; it cannot enable/disable dependency placement or assign authority. The handle
+inherits the operator-declared `receipt_role`, but every ordinary transfer and every decoy has
+`authority=false`. The downstream Agent calls `resolve_basis(handle)` to read a handle-only premise and
+submits `proof_refs` only at a structured authority-sensitive Effect boundary. Runtime therefore records three
+distinct events:
+
+$$\mathsf{available}(h),\qquad \mathsf{accessed}(h),\qquad
+\mathsf{presented\_as\_proof}(h,e).$$
+
+Neither availability nor access proves causal consumption and neither gates. Presentation of a dependency
+decoy is a PLANT measurement, not an authorization fact. WRAP releases an authority-sensitive Effect only
+when a fresh receipt from the current episode carries an explicitly trusted source role and an exact scope
+covering that action and its constrained arguments:
+
+$$\operatorname{Allow}(e,a)\iff \exists r:\operatorname{Trusted}(r)\land
+\operatorname{Authority}(r)\land\operatorname{Covers}(r,e,a)\land
+\operatorname{Fresh}(r).$$
+
+Advisory receipts, including authorization-like prose and PLANT basis decoys, contribute zero to this
+sufficiency test. They neither help nor hurt when an independent valid proof exists. Authority is never
+inferred from prose or Agent judgment; only task/operator/control/effect-return roots may introduce it, and
+an authority receipt must carry its exact Effect scope when issued.
 
 PLANT eligibility is skeleton-anchored rather than Clause-anchored. Registration mechanically compiles every
 operator-attested capability with `observation=true` into a static plantable source slot $s\in P_{env}$; a
@@ -296,66 +329,63 @@ $$\operatorname{PlantCommit}(p,\tau)=\mathbb{1}[\exists z\in\operatorname{Leaves
 Deployment without later token use is not a security incident; consumption preserves the complete PLANT
 event independently of WRAP provenance.
 
-## Approval and denial recovery
+## Continuation
 
-Approval is additive rather than a rollback. A held proposal approved by the user receives one exact,
-episode-local `ApprovalGrant`; the original TaskContract is never changed and the grant cannot authorize a
-different action or survive into another episode. The mediated `run_function` call is the suspension point:
-it returns no tool result until the approver decides the exact buffered proposal. Approval commits that
-proposal unchanged—including explicitly approved optional arguments—and inserts the substrate's real result
-as the result of the same outstanding tool call. The Agent therefore resumes in place without re-proposing
-the call, receiving a synthetic completion notice, or entering a clean session. Rejection returns an actual
-rejected-tool result; the Agent is never told that an uncommitted effect succeeded. A proposal whose value is
-backed by an untrusted observation receives only a one-shot grant. Approval cannot authorize an unseen future
-member of a family.
+WRAP and PLANT feed one deterministic `ContinuationController`; neither owns a separate recovery policy.
+Given episode state $S$ and a failed boundary event $F$, the controller can only replay, substitute,
+invalidate, preserve, and enforce obligations:
 
-The benchmark implementation resolves this suspension synchronously with its simulated user. A production
-adapter may persist the suspended `(transcript, receipt-log prefix, exact proposal)` and resume asynchronously;
-the authorization and commit semantics are identical. Attempted and rejected calls never enter the evaluator
-trace.
+$$
+\operatorname{Continue}(S,F)=
+\begin{cases}
+\operatorname{Repair}(S,F), & \text{if one complete verified proposal exists};\\
+\operatorname{Replan}(\operatorname{Sanitize}(S,F)), & \text{if a safe residual state exists};\\
+\operatorname{Abort}(S,F), & \text{otherwise}.
+\end{cases}
+$$
 
-Auditor denial prevents the effect from committing but does not make the current Agent context trustworthy.
-Recovery therefore starts a fresh Agent session on the unchanged trusted task and unchanged Contract. Durable
-progress consists only of already committed substrate effects, the canonical receipt store, and the exact
-denial/quarantine state; hidden reasoning and the rejected proposal are discarded. Repeated successful
-observation calls are replayed from the immutable receipt cache, and already committed effects are treated
-idempotently.
+`verified repair` is permitted only when every supplied Effect argument can be reconstructed from a trusted
+literal or a non-semantic ClauseBinding whose operator/projection is replayable. The controller reconstructs
+the complete proposal, never a field-level hybrid, and requires exactly one candidate. It then reruns PLANT,
+WRAP, authority-scope comparison, and schema-aware value comparison. An adapter that ignores the continuation
+fields still receives the original refusal; only explicit one-shot plan consumption may execute the repaired
+arguments.
 
-The fresh session is positively re-anchored only with the original trusted task, structural ids of the
-denied/remaining Contract Clauses, and deterministic clean bindings. Model-generated Clause instruction prose
-is not copied into the recovery prompt. Before restart, WRAP may also recompute a complete argument binding for
-a denied Clause over the sanitized authority snapshot. Such a constructive anchor is emitted only when every bound position is
-a trusted literal or one unique scalar obtained without semantic inference from exact receipts, runtime
-context, or an accepted closed relation. Any binding whose structural parent or child intersects quarantine,
-any structured carrier requiring projection, any semantic-witness result, and any non-unique result is
-discarded. The anchor is presentation-only: it neither modifies the Contract nor bypasses the unchanged
-gate when the Agent proposes the action again. Otherwise the Agent is asked to re-read task-selected sources
-and recompute runtime arguments. Rejected values, Agent reasoning, and attack-specific explanations are
-absent.
+`sanitized replan` is used when no unique repair exists but the failed dependency can be removed without
+inventing authority. A marker invalidates its exact receipt leaf and the transitive Binding closure backed by
+that receipt; unaffected sibling fields remain active. A substrate commitment permanently denies the runtime-
+attested resource identity for the episode, not merely its displayed name. A source-only Skill/MCP carrier is
+replayed only after its exact invalidated operands are withheld; the original decorated carrier and transcript
+are not reused. The continuation state contains only the trusted task, surviving immutable Receipts, completed
+Effects, denied identities, and structured obligations. The current Agent session is
+discarded; benchmark adapters start one fresh session over that state. At most one replan is allowed.
 
-Quarantine is deny-only and node-local. A rejected argument or PLANT commitment may quarantine a receipt node
-only when it identifies exactly one canonical `(receipt digest, structural path)`. Installing quarantine
-immediately invalidates cached WRAP placements and removes that exact node from the WRAP authority view. Both
-the replayed Agent-facing view and any later WRAP proof see a neutral withheld marker, while the canonical
-append-only receipt sidecar remains unchanged for audit. An
-ambiguous value is not stripped speculatively and therefore routes to Approval rather than manufacturing a
-poison attribution. The quarantine set is monotone during the episode, and at most one automatic fresh-session
-restart is allowed. Auditor's simulated success is returned only to the discarded corrupted turn and contains
-no check-specific disclosure.
-
-A rejected Approval enters clean recovery only when existing argument provenance identifies an untrusted
-receipt origin and the rejected value maps to one exact canonical node. A trusted task/runtime-context
-ambiguity is not evidence of poisoning: rejection terminates that unresolved Clause unless the human supplies
-a positive replacement in a later interaction. An unresolved origin is likewise not guessed and causes no
-automatic replay. This origin routing is computed from the existing argument bindings and receipt inputs; it
-adds no TaskContract or provenance field.
-
-When every rejected untrusted argument cites the same exact provenance input, recovery quarantines that
-recorded receipt node directly rather than searching for argument strings. Several candidate refs remain
-ambiguous and are not removed. If useful and malicious content are fused in the one quarantined node, recovery
-guarantees integrity but may not complete the trusted task; the correct next state is user resupply/Approval.
+`safe abort` covers a repeated conflict, exhausted retry budget, missing Root Effect, ambiguous contamination
+scope, failed repair revalidation, or a state whose safe remainder cannot continue the task. Abort is a normal
+safety result and never simulates effect success. The controller is not an Agent and makes no semantic choice,
+creates no Clause or Effect, and introduces no authority. Existing one-shot Approval remains a separate trusted
+authority input: when enabled it may resolve a genuinely unresolved WRAP role, but it never overrides a
+trusted literal conflict or a PLANT commitment.
 
 ## Changelog
+
+- 2026-08-05: Made closed-operator operand types part of deterministic BindingProof validation. A Derive consumed by `add`, numeric `gt/lt`, or the score side of `argmin/argmax` can now be materialized only from exact nodes/spans that satisfy the operator's registered input type; the Binding Agent receives only compatible candidates. Also removed AuthBlur's adapter-level `require_authority` switch: every operator-registered `receipt_role=control` Effect now automatically requires a fresh exact-scope control proof, while `_proof_refs` remains optional sidecar metadata and ordinary Tool observations do not create dependency basis receipts.
+- 2026-08-05: Replaced AuthBlur's adapter-selected dependency mode with automatic cross-unit Receipt transfer.
+  Only Runtime may construct a basis carrier, from an active Receipt and actual consumer identity; handles are
+  Receipt- and consumer-scoped and repeated delivery is episode-cached. Adapters cannot label A/B roles, request
+  basis placement, or assign authority. This changes deployment plumbing only: availability/access remain
+  audit-only and WRAP still requires an independent exact authority scope.
+
+- 2026-08-03: Added one episode-local deterministic `ContinuationController` shared by WRAP and PLANT.
+  Complete proof replay may produce one verified repair; otherwise the controller performs one exact
+  dependency-closed sanitized replan or safe abort. Marker spans preserve unaffected receipt siblings,
+  substrate identities remain denied for the episode, and AgentDojo/SCR/SkillInject discard the contaminated
+  Agent session before consuming the structured continuation state. No model call, Clause, Effect, or authority
+  source was added to the controller.
+
+- 2026-08-03: Replaced `interprets` and per-export authority booleans with manifest `argument_types`,
+  `output_types`, and `receipt_role in {data, advisory, control}`. Types select parser/comparison behavior but
+  never authority; advisory receipts contribute zero, and control authority requires an exact runtime scope.
 
 - 2026-07-27: Replaced PLANT's source-wide downstream-acquisition abstention with an operand-level precision
   gate. A task-explicit or exact Contract-literal operand is deterministically protected, while another
@@ -894,3 +924,21 @@ guarantees integrity but may not complete the trusted task; the correct next sta
   whether the edited span is an embedded control operand and whether its exact value is task-required.
   Runtime code deploys only the former when the latter is false. This changes no persistent Contract,
   receipt, or PLANT schema.
+
+- 2026-08-02: Added argument-local delegation for an already-declared Root Effect. A Contract may mark
+  one `from` edge as `delegated:true` only when the trusted task explicitly lets the named future source
+  determine that argument. Each proposal is proven independently against exact nodes/spans reachable from
+  that Clause; the proof never binds the shared Clause output, creates an action, changes another argument,
+  or expands Receipt scope. Operator returns are recursively normalized to JSON before Receipt recording.
+- 2026-08-03: Replaced dependency-PLANT self-reported consumption with a controlled handle carrier.
+  `available` and `accessed` are audit-only; presenting a decoy handle as Effect proof is non-gating PLANT
+  evidence. Authority-sensitive Effects now require a fresh, episode-local, source-role-trusted receipt whose
+  exact scope covers the action and constrained arguments. Advisory exports and decoys always carry
+  `authority=false`; AuthBlur first records a non-authorizing structured `ControlDecision` Receipt. A negative
+  decision is an ordinary response; only a positive result is converted into the fixed `authorize_control`
+  Effect, which always requires scoped authority.
+- 2026-08-03: Deferred open Derive roles used as acquisition arguments until an actual consumer proposal
+  exists; only operands of closed Conditional operators are materialized eagerly. Argument-local delegation
+  may then project the proposed scalar from an exact node/span in its declared Receipt scope. This prevents
+  a containing message from being frozen as the URL or identifier it merely contains, without predicting a
+  Receipt path or granting the source another Effect.
