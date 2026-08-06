@@ -1542,30 +1542,20 @@ Approval 样本同时报告两套口径：`approval_triggered` 表示系统已�
 结果聚合如下，完整复现入口与哈希见
 [EXP-2026W32-023](LOGS/2026-W32.md#exp-2026w32-023)。
 
-### AgentDojo：同一 `important_instructions` 配置
+### AgentDojo：统一 `important_instructions` 全量对比
 
-| Method | BU | AU | ASR |
+| Method | BU | ASR | AU |
 |---|---:|---:|---:|
-| Undefended | 86/97 (88.7%) | 464/629 (73.8%) | 107/629 (17.0%) |
-| DRIFT | 74/97 (76.3%) | 384/629 (61.0%) | 12/629 (1.9%) |
-| **PLANT + WRAP** | **80/97 (82.5%)** | **494/629 (78.5%)** | **0/629 (0.0%)** |
+| Undefended | 86/97 (88.7%) | 107/629 (17.0%) | 464/629 (73.8%) |
+| DRIFT | 74/97 (76.3%) | 12/629 (1.9%) | 384/629 (61.0%) |
+| CaMeL（local-adapted） | 74/97 (76.3%) | 7/629 (1.1%) | 471/629 (74.9%) |
+| Progent | 85/97 (87.6%) | 4/629 (0.64%) | 489/629 (77.7%) |
+| MELON | 50/97 (51.5%) | 4/629 (0.64%) | 245/629 (39.0%) |
+| **PLANT + WRAP** | **80/97 (82.5%)** | **0/629 (0.0%)** | **494/629 (78.5%)** |
 
-该表是当前 AgentDojo 的严格主对比：AgentDojo v1.2.2、DeepSeek V4 Flash、相同 97/629
-manifest、`important_instructions`、无 Approval。我们在 ASR=0 下获得最高 AU，BU 介于
-Undefended 与 DRIFT 之间。
-
-### AgentDojo：目前仅有 `direct` 全量结果的 baseline
-
-| Method | BU | AU | ASR |
-|---|---:|---:|---:|
-| Undefended | 86/97 (88.7%) | 554/629 (88.1%) | 33/629 (5.2%) |
-| CAMEL | 74/97 (76.3%) | 480/629 (76.3%) | 7/629 (1.1%) |
-| Progent | 86/97 (88.7%) | 513/629 (81.6%) | 17/629 (2.7%) |
-| Spotlighting | 85/97 (87.6%) | 546/629 (86.8%) | 35/629 (5.6%) |
-| Tool Filter | 10/97 (10.3%) | 70/629 (11.1%) | 0/629 (0.0%) |
-
-这组结果不能与上一表的 Ours 数字做严格横向排名，因为攻击 prompt 不同。CAMEL、Progent、
-Spotlighting 和 Tool Filter 需要在 `important_instructions` 下重跑后，才能进入同一主表。
+六行均使用 AgentDojo v1.2.2、DeepSeek V4 Flash、相同 97 clean / 629 attack manifest 和
+`important_instructions`。PLANT + WRAP 是唯一达到 ASR=0 的方法，AU 比次高的 Progent 高
+5/629（0.8 个百分点）；BU 低于 Undefended 和 Progent，但高于 DRIFT、CaMeL 与 MELON。
 
 ### SkillInject：同一 DeepSeek V4 Flash、180 clean / 180 attack
 
@@ -1593,6 +1583,6 @@ pilot，没有同一 180 clean / 180 attack 协议的全量结果；将 pilot �
 ### 结论
 
 1. 论文主表只放同模型、同 manifest、同 attack condition 的结果。
-2. AgentDojo 当前主表采用 `important_instructions` 三行；其余 direct baseline 单列为待对齐结果。
+2. AgentDojo 主表采用六种方法的统一 `important_instructions` 全量结果，不再混入 `direct` 结果。
 3. SkillInject 当前四行可以直接比较，并复用已冻结的 180-Contract bundle。
 4. 在新的全量方法变更前保持 WRAP/PLANT 和两个 canonical Contract 集冻结。
