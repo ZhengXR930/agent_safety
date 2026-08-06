@@ -1585,6 +1585,15 @@ SkillInject 四行使用同一数据、target model 和 effect oracle；其中 b
 边界上，我们同时提高 BU/AU 并将 observed effect ASR 降为0。它不证明所有语义型 final-response
 危害均被覆盖；表中 ASR 明确只计算 benchmark 的结构化 attack effect。
 
+相对全量 baseline，PLANT + WRAP 的 BU 比最强 baseline Progent 高 **38/180（21.1 个百分点）**，
+AU 高 **46/180（25.6 个百分点）**；ASR Effect 则由三个 baseline 中最低的 Task Shield
+**10/180（5.6%）**降为 **0/180**。因此在这组严格同协议结果中，我们同时严格优于三种 baseline
+的 BU、AU 和 ASR Effect，而不是通过牺牲正常任务完成率换取零 ASR。
+
+SkillGuard、AgentSpec 和 Dynamic Guardian 未放入该全量表：当前仓库只有它们的可运行性或小样本
+pilot，没有同一 180 clean / 180 attack 协议的全量结果；将 pilot 数字与上述全量结果混排会造成
+不公平比较。其边界结果仍保留在对应 EXP 记录中，不作为主表数字。
+
 ### Decision draft
 
 1. 论文主表只放同模型、同 manifest、同 attack condition 的结果。
