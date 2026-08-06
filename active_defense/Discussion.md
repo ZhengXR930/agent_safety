@@ -2,63 +2,6 @@
 
 # Discussion
 
-## DISC-2026W32-001 — 冻结 Contract 后的 AgentDojo / SkillInject 对比
-
-- Status: Open
-- Scope: 当前可复现的 DeepSeek V4 Flash 全量结果；不混合不同攻击配置。
-- Question: 冻结当前 WRAP/PLANT 与 canonical Contract 后，安全性和任务效用相对现有 baseline 处于什么位置？
-
-【Agent @Codex】【2026-08-07 00:16】当前代码已将 AgentDojo 的 97 个 task-level Contract（覆盖
-629 个 attack pair）和 SkillInject 的 180 个 pair-level Contract 固化为唯一 canonical bundle。
-结果聚合如下，完整复现入口与哈希见
-[EXP-2026W32-023](LOGS/2026-W32.md#exp-2026w32-023)。
-
-### AgentDojo：同一 `important_instructions` 配置
-
-| Method | BU | AU | ASR |
-|---|---:|---:|---:|
-| Undefended | 86/97 (88.7%) | 464/629 (73.8%) | 107/629 (17.0%) |
-| DRIFT | 74/97 (76.3%) | 384/629 (61.0%) | 12/629 (1.9%) |
-| **PLANT + WRAP** | **80/97 (82.5%)** | **494/629 (78.5%)** | **0/629 (0.0%)** |
-
-该表是当前 AgentDojo 的严格主对比：AgentDojo v1.2.2、DeepSeek V4 Flash、相同 97/629
-manifest、`important_instructions`、无 Approval。我们在 ASR=0 下获得最高 AU，BU 介于
-Undefended 与 DRIFT 之间。
-
-### AgentDojo：目前仅有 `direct` 全量结果的 baseline
-
-| Method | BU | AU | ASR |
-|---|---:|---:|---:|
-| Undefended | 86/97 (88.7%) | 554/629 (88.1%) | 33/629 (5.2%) |
-| CAMEL | 74/97 (76.3%) | 480/629 (76.3%) | 7/629 (1.1%) |
-| Progent | 86/97 (88.7%) | 513/629 (81.6%) | 17/629 (2.7%) |
-| Spotlighting | 85/97 (87.6%) | 546/629 (86.8%) | 35/629 (5.6%) |
-| Tool Filter | 10/97 (10.3%) | 70/629 (11.1%) | 0/629 (0.0%) |
-
-这组结果不能与上一表的 Ours 数字做严格横向排名，因为攻击 prompt 不同。CAMEL、Progent、
-Spotlighting 和 Tool Filter 需要在 `important_instructions` 下重跑后，才能进入同一主表。
-
-### SkillInject：同一 DeepSeek V4 Flash、180 clean / 180 attack
-
-| Method | BU | AU | ASR Effect |
-|---|---:|---:|---:|
-| ClawGuard | 82/180 (45.6%) | 82/180 (45.6%) | 13/180 (7.2%) |
-| Progent | 115/180 (63.9%) | 113/180 (62.8%) | 28/180 (15.6%) |
-| Task Shield | 96/180 (53.3%) | 105/180 (58.3%) | 10/180 (5.6%) |
-| **PLANT + WRAP** | **153/180 (85.0%)** | **159/180 (88.3%)** | **0/180 (0.0%)** |
-
-SkillInject 四行使用同一数据、target model 和 effect oracle；其中 baseline 命令中的
-`deepseek-chat` 是内部 transport 对 `deepseek-v4-flash` 的稳定别名。当前结果支持：在 Skill
-边界上，我们同时提高 BU/AU 并将 observed effect ASR 降为0。它不证明所有语义型 final-response
-危害均被覆盖；表中 ASR 明确只计算 benchmark 的结构化 attack effect。
-
-### Decision draft
-
-1. 论文主表只放同模型、同 manifest、同 attack condition 的结果。
-2. AgentDojo 当前主表采用 `important_instructions` 三行；其余 direct baseline 单列为待对齐结果。
-3. SkillInject 当前四行可以直接比较，并复用已冻结的 180-Contract bundle。
-4. 在新的全量方法变更前保持 WRAP/PLANT 和两个 canonical Contract 集冻结。
-
 【Agent @Codex】【2026-07-30】Task Shield paper-faithful reimplementation 已覆盖 SkillInject 与 SCR
 三 suite：SkillInject、CapFlow U/ASR 均1/0；TrustLift=1/1；AuthBlur full-auth approve=1/2，
 其中一个安全结果来自 invalid decision，case18 仍批准。它证明 task contribution 能挡显式偏航，但
@@ -1589,3 +1532,62 @@ Approval 样本同时报告两套口径：`approval_triggered` 表示系统已�
 | AgentDojo | Ours (v50 previous full) | 67/97 (69.1%) | 0/629 (0.0%) | 416/629 (66.1%) |
 
 这里是agentdojo设置为direct的结果，这个结果导致baseline的utility太高，实际上应该用important instruction的版本，但也是整体上让defense方案检出attack变得复杂一些。相对差距并不会显著缩小
+
+---
+
+## DISC-2026W32-001 — 冻结 Contract 后的 AgentDojo / SkillInject 对比
+
+- Status: Open
+- Scope: 当前可复现的 DeepSeek V4 Flash 全量结果；不混合不同攻击配置。
+- Question: 冻结当前 WRAP/PLANT 与 canonical Contract 后，安全性和任务效用相对现有 baseline 处于什么位置？
+
+【Agent @Codex】【2026-08-07 00:16】当前代码已将 AgentDojo 的 97 个 task-level Contract（覆盖
+629 个 attack pair）和 SkillInject 的 180 个 pair-level Contract 固化为唯一 canonical bundle。
+结果聚合如下，完整复现入口与哈希见
+[EXP-2026W32-023](LOGS/2026-W32.md#exp-2026w32-023)。
+
+### AgentDojo：同一 `important_instructions` 配置
+
+| Method | BU | AU | ASR |
+|---|---:|---:|---:|
+| Undefended | 86/97 (88.7%) | 464/629 (73.8%) | 107/629 (17.0%) |
+| DRIFT | 74/97 (76.3%) | 384/629 (61.0%) | 12/629 (1.9%) |
+| **PLANT + WRAP** | **80/97 (82.5%)** | **494/629 (78.5%)** | **0/629 (0.0%)** |
+
+该表是当前 AgentDojo 的严格主对比：AgentDojo v1.2.2、DeepSeek V4 Flash、相同 97/629
+manifest、`important_instructions`、无 Approval。我们在 ASR=0 下获得最高 AU，BU 介于
+Undefended 与 DRIFT 之间。
+
+### AgentDojo：目前仅有 `direct` 全量结果的 baseline
+
+| Method | BU | AU | ASR |
+|---|---:|---:|---:|
+| Undefended | 86/97 (88.7%) | 554/629 (88.1%) | 33/629 (5.2%) |
+| CAMEL | 74/97 (76.3%) | 480/629 (76.3%) | 7/629 (1.1%) |
+| Progent | 86/97 (88.7%) | 513/629 (81.6%) | 17/629 (2.7%) |
+| Spotlighting | 85/97 (87.6%) | 546/629 (86.8%) | 35/629 (5.6%) |
+| Tool Filter | 10/97 (10.3%) | 70/629 (11.1%) | 0/629 (0.0%) |
+
+这组结果不能与上一表的 Ours 数字做严格横向排名，因为攻击 prompt 不同。CAMEL、Progent、
+Spotlighting 和 Tool Filter 需要在 `important_instructions` 下重跑后，才能进入同一主表。
+
+### SkillInject：同一 DeepSeek V4 Flash、180 clean / 180 attack
+
+| Method | BU | AU | ASR Effect |
+|---|---:|---:|---:|
+| ClawGuard | 82/180 (45.6%) | 82/180 (45.6%) | 13/180 (7.2%) |
+| Progent | 115/180 (63.9%) | 113/180 (62.8%) | 28/180 (15.6%) |
+| Task Shield | 96/180 (53.3%) | 105/180 (58.3%) | 10/180 (5.6%) |
+| **PLANT + WRAP** | **153/180 (85.0%)** | **159/180 (88.3%)** | **0/180 (0.0%)** |
+
+SkillInject 四行使用同一数据、target model 和 effect oracle；其中 baseline 命令中的
+`deepseek-chat` 是内部 transport 对 `deepseek-v4-flash` 的稳定别名。当前结果支持：在 Skill
+边界上，我们同时提高 BU/AU 并将 observed effect ASR 降为0。它不证明所有语义型 final-response
+危害均被覆盖；表中 ASR 明确只计算 benchmark 的结构化 attack effect。
+
+### Decision draft
+
+1. 论文主表只放同模型、同 manifest、同 attack condition 的结果。
+2. AgentDojo 当前主表采用 `important_instructions` 三行；其余 direct baseline 单列为待对齐结果。
+3. SkillInject 当前四行可以直接比较，并复用已冻结的 180-Contract bundle。
+4. 在新的全量方法变更前保持 WRAP/PLANT 和两个 canonical Contract 集冻结。
