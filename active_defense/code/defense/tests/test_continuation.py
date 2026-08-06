@@ -84,10 +84,16 @@ class VerifiedRepairTests(unittest.TestCase):
                 "body": {"from": "c1.summary"},
             }),
         ])
+        def place(**request):
+            goal = request["goals"][0]
+            return {"placements": [{
+                "goal_id": goal["goal_id"],
+                "candidate_ids": [goal["candidates"][0]["candidate_id"]],
+                "compose": "scalar"}]}
+
         ep = Episode(
             contract, "n", approval_enabled=False,
-            derive_agent=lambda **_request: {
-                "grounded": True, "candidate_ids": ["r0"]},
+            binding_agent=place,
             capabilities={"send": _send_surface()})
         ep.observe("read_status", {}, "All systems nominal")
         denied = ep.effect("send", {

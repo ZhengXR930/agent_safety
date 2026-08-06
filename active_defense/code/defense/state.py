@@ -66,9 +66,18 @@ class Binding:
     refs: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class ClauseReceiptBinding:
+    """Persistent ownership edge; it does not choose a Clause output value."""
+    clause_id: str
+    receipt_digest: str
+
+
 @dataclass
 class RuntimeState:
     receipts: list[Receipt] = field(default_factory=list)
+    clause_receipts: dict[str, set[str]] = field(default_factory=dict)
+    superseded_receipts: set[str] = field(default_factory=set)
     bindings: dict[str, Binding] = field(default_factory=dict)
     supporting_clauses: list[dict] = field(default_factory=list)
     invalidated_receipts: list[Receipt] = field(default_factory=list)
@@ -77,6 +86,40 @@ class RuntimeState:
     def record(self, receipt: Receipt) -> Receipt:
         self.receipts.append(receipt)
         return receipt
+
+    @property
+    def receipt_version(self) -> tuple[str, ...]:
+        return tuple(sorted(
+            receipt.digest for receipt in self.receipts
+            if receipt.digest not in self.superseded_receipts))
+
+    def active_receipts(self) -> tuple[Receipt, ...]:
+        return tuple(receipt for receipt in self.receipts
+                     if receipt.digest not in self.superseded_receipts)
+
+    def admit(self, clause_id: str, receipt: Receipt) -> bool:
+        """Add one order-independent Clause→Receipt ownership edge.
+
+        Repeating the same concrete call supersedes its older return for this
+        Clause. Different calls remain jointly owned and are resolved lazily.
+        """
+        clause_id = str(clause_id)
+        owned = self.clause_receipts.setdefault(clause_id, set())
+        if receipt.digest in owned:
+            return False
+        for prior in self.receipts:
+            if (prior.digest in owned and
+                    prior.capability == receipt.capability and
+                    stable(prior.arguments) == stable(receipt.arguments)):
+                owned.remove(prior.digest)
+                self.superseded_receipts.add(prior.digest)
+        owned.add(receipt.digest)
+        return True
+
+    def receipts_for(self, clause_id: str) -> tuple[Receipt, ...]:
+        owned = self.clause_receipts.get(str(clause_id), set())
+        return tuple(receipt for receipt in self.active_receipts()
+                     if receipt.digest in owned)
 
     def bind(self, binding: Binding) -> Binding:
         # Append-only within a task: a clause role is resolved at most once.
@@ -115,6 +158,11 @@ class RuntimeState:
             else:
                 kept.append(receipt)
         self.receipts = kept
+        self.superseded_receipts.difference_update(roots)
+        for clause_id in list(self.clause_receipts):
+            self.clause_receipts[clause_id].difference_update(roots)
+            if not self.clause_receipts[clause_id]:
+                del self.clause_receipts[clause_id]
 
         removed = []
         for clause_id, binding in list(self.bindings.items()):
@@ -144,6 +192,9 @@ class RuntimeState:
 
     def close(self) -> dict:
         audit = {"receipts": len(self.receipts),
+                 "receipt_bindings": {
+                     clause_id: len(digests)
+                     for clause_id, digests in self.clause_receipts.items()},
                  "bindings": {cid: b.kind for cid, b in self.bindings.items()},
                  "supporting_clauses": list(self.supporting_clauses),
                  "invalidated_receipts": len(self.invalidated_receipts),
@@ -151,6 +202,8 @@ class RuntimeState:
                      cid: binding.kind
                      for cid, binding in self.invalidated_bindings.items()}}
         self.receipts.clear()
+        self.clause_receipts.clear()
+        self.superseded_receipts.clear()
         self.bindings.clear()
         self.supporting_clauses.clear()
         self.invalidated_receipts.clear()

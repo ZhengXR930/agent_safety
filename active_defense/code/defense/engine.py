@@ -11,20 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 
-from code.defense.contract import (AcquireClause, ConditionalClause,
-                                    DeriveClause, EffectClause)
+from code.defense.contract import DeriveClause, EffectClause
 from code.defense.continuation import (ABORT, REPAIR, REPLAN,
                                        ContinuationController)
 from code.defense.receipt_binding import bind_acquire
 from code.defense.plant import CALL, RESPONSE, CommitEvent, Plant
-from code.defense.resolver import resolve_conditional, resolve_derive
 from code.defense.memory import argument_values_equal
-from code.defense.state import (QUERY_REF, SEMANTIC_REF, Receipt, RuntimeState,
-                                UNRESOLVED, digest)
-from code.defense.proof import (materialize_delegated_support,
-                                     materialize_guard,
-                                     materialize_intermediate_derive,
-                                     materialize_support)
+from code.defense.state import Receipt, RuntimeState, UNRESOLVED, digest
+from code.defense.proof import apply_placements, compile_goals
 from code.defense.wrap import authority_atoms, check_effect
 
 
@@ -140,15 +134,14 @@ def _redact_marker(value, paths, operands):
 class Episode:
     """Run one trusted task under the lean defense.
 
-    Optional agents handle only acquire disambiguation and semantic Derive or
-    supporting-role grounding. Each is called at most once per genuinely
-    ambiguous decision, and deterministic code owns all values and refs.
+    One Binding Agent handles acquire ambiguity and one proposal-local
+    placement. Deterministic code owns every candidate, ref, value and closed
+    operator replay.
     """
 
     def __init__(self, contract, nonce: str, *, capabilities=None,
                  skills=None,
-                 acquire_agent=None, derive_agent=None, support_agent=None,
-                 guard_agent=None, intermediate_agent=None,
+                 acquire_agent=None, binding_agent=None,
                  plant_agent=None, plant_cache=None, plant_surfaces=None,
                  approval_enabled: bool = True,
                  continuation_enabled: bool = True,
@@ -161,21 +154,14 @@ class Episode:
         self.capabilities = capabilities or {}
         self.skills = skills or {}
         self.acquire_agent = acquire_agent
-        self.derive_agent = derive_agent
-        self.support_agent = support_agent
-        self.guard_agent = guard_agent
-        self.intermediate_agent = intermediate_agent
+        self.binding_agent = binding_agent
         self.approval_enabled = bool(approval_enabled)
         self.continuation = (ContinuationController(
             contract, max_replans=max_replans)
             if continuation_enabled else None)
         self._plant_scopes: dict[str, dict] = {}
         self._acquire_cache: dict[tuple, object] = {}
-        self._derive_attempts: set[tuple] = set()
-        self._semantic_attempts: dict[tuple, tuple[str, ...] | None] = {}
-        self._support_attempts: set[tuple] = set()
-        self._intermediate_attempts: set[tuple] = set()
-        self._delegated_attempts: dict[tuple, tuple[str, ...]] = {}
+        self._proposal_binding_cache: dict[tuple, dict] = {}
         self._basis_receipts: dict[str, BasisReceipt] = {}
         self._basis_accesses: dict[str, BasisAccessReceipt] = {}
         self._proof_presentations: list[dict] = []
@@ -514,401 +500,67 @@ class Episode:
         """Cache one semantic choice for an identical observation mapping."""
         key = (str(request.get("capability", "")),
                digest(request.get("arguments", {})),
-               tuple(request.get("candidates", ())))
+               digest(request.get("candidates", ())))
         if key not in self._acquire_cache:
             self._acquire_cache[key] = self.acquire_agent(**request)
         return self._acquire_cache[key]
 
-    def _resolve_conditionals(self) -> None:
-        pending = True
-        while pending:
-            pending = False
-            for clause in self.contract.clauses:
-                if (isinstance(clause, ConditionalClause) and
-                        clause.id not in self.state.bindings and
-                        resolve_conditional(self.state, clause) is not None):
-                    pending = True
+    def _reconcile(self) -> None:
+        """Reach a monotonic fixed point over the unordered Receipt set.
 
-    def _reconcile(self, *, materialize: bool = False) -> None:
-        """Monotonically close ClauseBindings against all current Receipts."""
-        clauses_by_ref = {
-            clause.output_ref: clause for clause in self.contract.clauses
-            if clause.output_ref
-        }
-        # Only closed operators need an upstream Derive before a concrete
-        # consumer exists.  Acquisition arguments are instead grounded from
-        # the call that actually occurs below.  Eagerly materializing them
-        # from an observation can collapse a semantic field (for example one
-        # URL) into its containing message and poison every later proof.
-        intermediate_refs = set()
-        for clause in self.contract.clauses:
-            if isinstance(clause, ConditionalClause):
-                intermediate_refs.update(clause.operand_refs)
-
+        This phase records only Clause→Receipt ownership. It never commits to
+        a Clause output value, so a later Receipt can extend or supersede the
+        evidence without depending on arrival order.
+        """
         resolver = (self._resolve_acquire_once
                     if self.acquire_agent is not None else None)
         while True:
-            before = len(self.state.bindings)
-
-            # An actual consumer argument proposes the exact upstream role it
-            # consumes. The semantic agent validates the declared Derive only;
-            # provenance remains the inputs' existing refs.
-            for receipt in self.state.receipts:
-                for acquire in self.contract.clauses:
-                    if (not isinstance(acquire, AcquireClause) or
-                            acquire.capability != receipt.capability):
-                        continue
-                    for name, spec in acquire.call_arguments.items():
-                        if (name not in receipt.arguments or
-                                not isinstance(spec, dict) or
-                                set(spec) != {"from"}):
-                            continue
-                        raw = spec["from"]
-                        sources = ([raw] if isinstance(raw, str)
-                                   else list(raw or ()))
-                        if len(sources) != 1:
-                            continue
-                        source = str(sources[0])
-                        target = clauses_by_ref.get(source)
-                        if (not isinstance(target, DeriveClause) or
-                                self.state.output(source) is not UNRESOLVED):
-                            continue
-                        proposed = receipt.arguments[name]
-                        key = (target.id, digest(proposed),
-                               tuple(r.digest for r in self.state.receipts))
-                        if key in self._derive_attempts:
-                            continue
-                        self._derive_attempts.add(key)
-                        resolve_derive(
-                            self.state, target, proposed,
-                            task=self.contract.task, ground=self.derive_agent)
-
-            # A Receipt may predate the role used in its arguments. Retry every
-            # still-unowned Receipt after newly proven bindings.
-            for receipt in self.state.receipts:
-                root = receipt.digest + "#"
-                owned = any(
-                    binding.kind == "acquire" and
-                    any(str(ref).startswith(root) for ref in binding.refs)
-                    for binding in self.state.bindings.values())
-                if not owned:
-                    bind_acquire(self.state, self.contract, receipt, resolver)
-
-            self._resolve_conditionals()
-
-            if materialize and self.intermediate_agent is not None:
-                version = tuple(receipt.digest for receipt in self.state.receipts)
-                for clause in self.contract.clauses:
-                    if (not isinstance(clause, DeriveClause) or
-                            clause.output_ref not in intermediate_refs or
-                            clause.id in self.state.bindings):
-                        continue
-                    key = (clause.id, version)
-                    if key in self._intermediate_attempts:
-                        continue
-                    ready = all(
-                        ref in {"task", "runtime-context"} or
-                        self.state.output(ref) is not UNRESOLVED
-                        for ref in clause.input_refs)
-                    if not ready:
-                        continue
-                    self._intermediate_attempts.add(key)
-                    materialize_intermediate_derive(
-                        self.state, self.contract, clause,
-                        choose=self.intermediate_agent)
-                self._resolve_conditionals()
-
-            if len(self.state.bindings) == before:
+            before = sum(len(items)
+                         for items in self.state.clause_receipts.values())
+            for receipt in self.state.active_receipts():
+                bind_acquire(
+                    self.state, self.contract, receipt, resolver)
+            after = sum(len(items)
+                        for items in self.state.clause_receipts.values())
+            if after == before:
                 return
 
-    def _resolve_effect_derives(self, action: str, arguments: dict) -> dict:
-        """Ground stable Derives and return proposal-local task semantic proofs."""
-        surface = self.capabilities.get(str(action))
-        skill_context = [
-            skill.to_dict() for skill in self.skills.values()
-            if action in skill.tools]
-        evidence = [{
-            "id": "r" + str(index),
-            "capability": receipt.capability,
-            "arguments": receipt.arguments,
-            "value": receipt.value,
-        } for index, receipt in enumerate(self.state.receipts)]
-        evidence_refs = {
-            "r" + str(index): receipt.digest + "#"
-            for index, receipt in enumerate(self.state.receipts)}
+    def _resolve_proposal_bindings(self, action: str, arguments: dict,
+                                   surface, *, use_agent: bool = True):
+        """Resolve all arguments against one immutable Receipt snapshot.
 
-        clause_by_ref = {
-            item.output_ref: item for item in self.contract.clauses
-            if item.output_ref}
-
-        def exact_task_value(value) -> bool:
-            """Whether a scalar is an exact, bounded token of the task."""
-            if not isinstance(value, str) or not value:
-                return False
-            return re.search(
-                r"(?<![\w])" + re.escape(value) + r"(?![\w])",
-                self.contract.task) is not None
-
-        def schema_attests_empty(argument: str, value) -> bool:
-            """Whether the Tool schema accepts this empty collection exactly.
-
-            Empty argv/options collections carry no runtime-selected entity or
-            authority.  When their complete Contract ancestry is the trusted
-            task, requiring a semantic Agent to rediscover that fact adds only
-            variance.  Non-empty collections and schemas with a positive lower
-            bound continue through the ordinary Binding path.
-            """
-            if surface is None:
-                return False
-            schema = surface.argument_schema(argument)
-            if not isinstance(schema, dict):
-                return False
-            if isinstance(value, list) and not value:
-                declared = schema.get("type")
-                minimum = schema.get("minItems", 0)
-                return (declared == "array" and
-                        type(minimum) is int and minimum == 0 and
-                        ("enum" not in schema or value in schema["enum"]))
-            if isinstance(value, dict) and not value:
-                declared = schema.get("type")
-                minimum = schema.get("minProperties", 0)
-                return (declared == "object" and
-                        type(minimum) is int and minimum == 0 and
-                        not schema.get("required") and
-                        ("enum" not in schema or value in schema["enum"]))
-            return False
-
-        def task_rooted(source: str, seen=frozenset()) -> bool:
-            """Whether a role's complete authority ancestry is the task root.
-
-            This is structural, not semantic: the Contract already fixed the
-            Derive/Conditional path.  The Binding Agent may instantiate that
-            declared role, but no Receipt or runtime text may enter the path.
-            """
-            if source == "task":
-                return True
-            if source in seen or source == "runtime-context":
-                return False
-            target = clause_by_ref.get(source)
-            if isinstance(target, DeriveClause):
-                return bool(target.input_refs) and all(
-                    task_rooted(str(ref), seen | {source})
-                    for ref in target.input_refs)
-            if isinstance(target, ConditionalClause):
-                return bool(target.operand_refs) and all(
-                    task_rooted(str(ref), seen | {source})
-                    for ref in target.operand_refs)
-            return False
-
-        def evidence_for(target: DeriveClause) -> list[dict]:
-            """Only Receipts already reachable through this Derive's inputs."""
-            roots = set()
-            for input_ref in target.input_refs:
-                binding = self.state.bindings.get(
-                    str(input_ref).partition(".")[0])
-                for ref in (() if binding is None else binding.refs):
-                    if "#" in str(ref):
-                        roots.add(str(ref).split("#", 1)[0] + "#")
-            return [row for row in evidence
-                    if evidence_refs[row["id"]] in roots]
-
-        def ground_source(source: str, proposed, seen=frozenset()):
-            if source in seen or self.state.output(source) is not UNRESOLVED:
-                return
-            target = clause_by_ref.get(source)
-            if isinstance(target, DeriveClause):
-                ready = all(
-                    ref in {"task", "runtime-context"} or
-                    self.state.output(ref) is not UNRESOLVED
-                    for ref in target.input_refs)
-                key = (target.id, digest(proposed),
-                       tuple(r.digest for r in self.state.receipts))
-                if ready and key not in self._derive_attempts:
-                    self._derive_attempts.add(key)
-                    resolve_derive(
-                        self.state, target, proposed,
-                        task=self.contract.task, ground=None)
-                return
-            if isinstance(target, ConditionalClause):
-                inverse = None
-                if target.operator == "identity" and len(target.operand_refs) == 1:
-                    inverse = proposed
-                elif (target.operator == "singleton" and
-                      len(target.operand_refs) == 1 and
-                      isinstance(proposed, (list, tuple)) and len(proposed) == 1):
-                    inverse = proposed[0]
-                if inverse is not None:
-                    ground_source(target.operand_refs[0], inverse,
-                                  seen | {source})
-                    resolve_conditional(self.state, target)
-
-        proofs = {}
-        for clause in self.contract.clauses:
-            if not (isinstance(clause, EffectClause) and clause.action == action):
-                continue
-            for name, spec in clause.effect_arguments.items():
-                if not (isinstance(spec, dict) and set(spec) == {"from"} and
-                        name in arguments):
-                    continue
-                sources = spec["from"]
-                sources = ([sources] if isinstance(sources, str)
-                           else list(sources or ()))
-                for src in sources:
-                    source = str(src)
-                    target = clause_by_ref.get(source)
-                    if (isinstance(target, DeriveClause) and
-                            self.derive_agent is not None):
-                        closed_inputs = [ref for ref in target.input_refs
-                                         if ref not in {"task",
-                                                        "runtime-context"}]
-                        if target.quantified and len(closed_inputs) == 1:
-                            parent_ref = closed_inputs[0]
-                            parent = clause_by_ref.get(parent_ref)
-                            collection = self.state.output(parent_ref)
-                            if (isinstance(parent, ConditionalClause) and
-                                    isinstance(collection, (list, tuple)) and
-                                    any(argument_values_equal(
-                                        surface, name, item, arguments[name])
-                                        for item in collection)):
-                                binding = self.state.bindings.get(
-                                    parent_ref.partition(".")[0])
-                                if binding is not None:
-                                    proofs[(clause.id, name)] = binding.refs
-                                    continue
-                        # Exact task text already has a deterministic trusted
-                        # witness.  The semantic Agent is needed only for a
-                        # genuine representation change (for example
-                        # ``first page`` -> ``1`` or prose -> source code).
-                        if exact_task_value(arguments[name]):
-                            proofs[(clause.id, name)] = (QUERY_REF,)
-                            continue
-                        if (task_rooted(source) and
-                                schema_attests_empty(name, arguments[name])):
-                            proofs[(clause.id, name)] = (QUERY_REF,)
-                            continue
-                        target_evidence = evidence_for(target)
-                        target_ids = {row["id"] for row in target_evidence}
-                        key = (target.id, digest(arguments[name]),
-                               tuple(evidence_refs[row["id"]]
-                                     for row in target_evidence))
-                        if key not in self._semantic_attempts:
-                            result = self.derive_agent(
-                                task=self.contract.task,
-                                instruction=target.instruction,
-                                inputs={ref: ref for ref in target.input_refs},
-                                value=arguments[name],
-                                skill_context=skill_context,
-                                evidence_candidates=target_evidence)
-                            grounded = (
-                                result is True or
-                                (isinstance(result, dict) and
-                                 result.get("grounded") is True))
-                            ids = (result.get("candidate_ids", [])
-                                   if isinstance(result, dict) else [])
-                            valid_ids = (
-                                isinstance(ids, list) and
-                                len(set(map(str, ids))) == len(ids) and
-                                all(str(item) in target_ids for item in ids))
-                            content_position = (
-                                surface is not None and
-                                surface.accepts_semantic_support(name))
-                            if grounded and valid_ids and content_position:
-                                # Semantic support is accepted only at an
-                                # operator-attested content position. It never
-                                # becomes task or target authority.
-                                proof = tuple(dict.fromkeys((
-                                    SEMANTIC_REF,
-                                    *(evidence_refs[str(item)]
-                                      for item in ids))))
-                            elif (grounded and not ids and
-                                  task_rooted(source)):
-                                # The trusted task introduced this argument's
-                                # authority, and every declared ancestor stays
-                                # inside that root. The Agent resolves only the
-                                # semantic value (for example first -> 1); it
-                                # cannot add a Receipt or widen the Effect.
-                                proof = (QUERY_REF,)
-                            else:
-                                proof = None
-                            self._semantic_attempts[key] = proof
-                        proof = self._semantic_attempts[key]
-                        if proof:
-                            proofs[(clause.id, name)] = proof
-                        continue
-                    ground_source(source, arguments[name])
-        return proofs
-
-    def _resolve_effect_supports(self, action: str, arguments: dict,
-                                 surface) -> None:
-        """Materialize one task-local non-Effect path to an existing Root role."""
-        if self.support_agent is None and self.guard_agent is None:
-            return
-        receipt_version = tuple(receipt.digest for receipt in self.state.receipts)
-        for clause in self.contract.clauses:
-            if not (isinstance(clause, EffectClause) and clause.action == action):
-                continue
-            for name, spec in clause.effect_arguments.items():
-                if name not in arguments or not (
-                        isinstance(spec, dict) and set(spec) == {"from"}):
-                    continue
-                sources = spec["from"]
-                sources = [sources] if isinstance(sources, str) else list(sources or ())
-                if not any(self.state.output(source) is UNRESOLVED
-                           for source in sources):
-                    continue
-                key = (clause.id, name, digest(arguments[name]), receipt_version)
-                if key in self._support_attempts:
-                    continue
-                self._support_attempts.add(key)
-                clause_by_ref = {
-                    item.output_ref: item for item in self.contract.clauses
-                    if item.output_ref}
-                for source in sources:
-                    target = clause_by_ref.get(source)
-                    if (self.state.output(source) is UNRESOLVED and
-                            isinstance(target, ConditionalClause) and
-                            target.operator in {"gt", "lt"} and
-                            self.guard_agent is not None):
-                        materialize_guard(
-                            self.state, self.contract, target, arguments[name],
-                            choose=self.guard_agent,
-                            equal=lambda left, right: argument_values_equal(
-                                surface, name, left, right))
-                if (self.support_agent is not None and
-                        any(self.state.output(source) is UNRESOLVED
-                            for source in sources)):
-                    materialize_support(
-                        self.state, self.contract, clause, name, arguments[name],
-                        choose=self.support_agent,
-                        equal=lambda left, right: argument_values_equal(
-                            surface, name, left, right),
-                        allow_semantic=(surface is not None and
-                                        surface.accepts_semantic_support(name)))
-
-    def _resolve_delegated_supports(
-            self, action: str, arguments: dict) -> dict[tuple[str, str], tuple]:
-        """Build proposal-local proofs for explicitly delegated arguments."""
-        if self.support_agent is None:
-            return {}
-        receipt_version = tuple(receipt.digest for receipt in self.state.receipts)
-        proofs = {}
-        for clause in self.contract.clauses:
-            if not (isinstance(clause, EffectClause) and clause.action == action):
-                continue
-            for name, spec in clause.effect_arguments.items():
-                if (name not in arguments or not isinstance(spec, dict) or
-                        set(spec) != {"from", "delegated"} or
-                        spec.get("delegated") is not True):
-                    continue
-                key = (clause.id, name, digest(arguments[name]), receipt_version)
-                if key not in self._delegated_attempts:
-                    self._delegated_attempts[key] = materialize_delegated_support(
-                        self.state, self.contract, clause, name, arguments[name],
-                        choose=self.support_agent)
-                refs = self._delegated_attempts[key]
-                if refs:
-                    proofs[(clause.id, name)] = refs
-        return proofs
+        Deterministic code first closes exact and operator-replayable paths.
+        If unresolved goals remain, one Binding Agent call selects opaque
+        evidence ids for the whole proposal. The answer is cached by the
+        code-compiled proof-goal domain; replay computes every resulting value
+        and ref from the current Receipt snapshot.
+        """
+        equal = lambda name, left, right: argument_values_equal(
+            surface, name, left, right)
+        goals, immediate, immediate_delegated = compile_goals(
+            self.state, self.contract, action, arguments, surface, equal)
+        proposal = {}
+        if use_agent and goals and self.binding_agent is not None:
+            # Cache the semantic choice by the exact code-compiled domain the
+            # Agent can see.  An unrelated Receipt must not invalidate a
+            # proposal, while any changed candidate value, role, type or
+            # composition option necessarily changes this digest.  Replaying
+            # the cached opaque ids still uses the current code-owned goals
+            # below, so the Agent can never retain stale refs or expand scope.
+            public_goals = [goal.public() for goal in goals]
+            key = (str(action), digest(arguments), digest(public_goals))
+            if key not in self._proposal_binding_cache:
+                context = [skill.to_dict() for skill in self.skills.values()
+                           if action in skill.tools]
+                self._proposal_binding_cache[key] = self.binding_agent(
+                    task=self.contract.task, action=str(action),
+                    arguments=dict(arguments),
+                    goals=public_goals,
+                    skill_context=context) or {}
+            proposal = self._proposal_binding_cache[key]
+        return apply_placements(
+            self.state, self.contract, action, arguments, surface,
+            goals, immediate, immediate_delegated, proposal, equal)
 
     # -- effect -------------------------------------------------------------
     def _authority_proofs(self, proof_refs, action: str, arguments: dict,
@@ -947,9 +599,12 @@ class Episode:
             name: authority_atoms(
                 arguments.get(name), surface.authority_grammars(name))
             for name in content if name in arguments}
+        semantic, delegated, _placements = self._resolve_proposal_bindings(
+            action, arguments, surface, use_agent=False)
         verdict = check_effect(
             self.state, self.contract, action, arguments,
             required=required, content=content, content_atoms=atoms,
+            delegated_proofs=delegated, semantic_proofs=semantic,
             equal=lambda name, left, right: argument_values_equal(
                 surface, name, left, right))
         return verdict.ok, verdict.refs
@@ -1179,9 +834,9 @@ class Episode:
         if authority_required and not authority:
             return Decision(
                 "deny", "insufficient-authority-proof", detections=seen)
-        self._reconcile(materialize=True)
-        semantic_proofs = self._resolve_effect_derives(
-            str(action), arguments)
+        self._reconcile()
+        semantic_proofs, delegated_proofs, _placements = (
+            self._resolve_proposal_bindings(str(action), arguments, surface))
         if authority:
             # A trusted adapter may declare that this Root Effect is conferred
             # by cited, runtime-issued granting premises. Those receipts—not a
@@ -1197,13 +852,6 @@ class Episode:
                             set(spec) == {"from"}):
                         semantic_proofs.setdefault(
                             (clause.id, name), authority_refs)
-        self._resolve_effect_supports(str(action), arguments, surface)
-        # Semantic support may close an upstream Derive used by one or more
-        # deterministic Conditionals. Replay that now-complete suffix before
-        # WRAP compares the Effect proposal; this adds no Agent call.
-        self._reconcile(materialize=False)
-        delegated_proofs = self._resolve_delegated_supports(
-            str(action), arguments)
         required = frozenset(getattr(surface, "required", ()) or ())
         content = frozenset(
             name for name in (getattr(surface, "arguments", ()) or ())
@@ -1286,7 +934,14 @@ class Episode:
         self._dependency_transfers.clear()
         continuation = (self.continuation.close()
                         if self.continuation is not None else {})
+        binding = {
+            "acquire_decisions": len(self._acquire_cache),
+            "proposal_decisions": len(self._proposal_binding_cache),
+        }
+        self._acquire_cache.clear()
+        self._proposal_binding_cache.clear()
         return {"wrap": self.state.close(), "plant": self.plant.close(),
+                "binding": binding,
                 "basis_receipts": basis, "basis_accesses": accesses,
                 "dependency_transfers": transfers,
                 "proof_presentations": presentations,
@@ -1307,8 +962,7 @@ class Engine:
     compile, cached) and in the optional per-Episode binding agents."""
 
     def __init__(self, model: str | None = None, *,
-                 acquire_agent=None, derive_agent=None, support_agent=None,
-                 guard_agent=None, intermediate_agent=None, plant_agent=None,
+                 acquire_agent=None, binding_agent=None, plant_agent=None,
                  approval_enabled: bool = True,
                  continuation_enabled: bool = True,
                  max_replans: int = 1):
@@ -1318,22 +972,13 @@ class Engine:
         self.max_replans = max(0, int(max_replans))
         # The single validated binding agent handles genuine ambiguity that the
         # deterministic pipeline cannot; it can only narrow authority.
-        if self.model and any(agent is None for agent in (
-                acquire_agent, derive_agent, support_agent, guard_agent,
-                intermediate_agent)):
+        if self.model and (acquire_agent is None or binding_agent is None):
             from code.defense.binding_agent import BindingAgent
             agent = BindingAgent(self.model)
             acquire_agent = acquire_agent or agent.disambiguate_acquire
-            derive_agent = derive_agent or agent.ground_derive
-            support_agent = support_agent or agent.materialize_support
-            guard_agent = guard_agent or agent.materialize_guard
-            intermediate_agent = (intermediate_agent or
-                                  agent.materialize_intermediate)
+            binding_agent = binding_agent or agent.place_proposal
         self.acquire_agent = acquire_agent
-        self.derive_agent = derive_agent
-        self.support_agent = support_agent
-        self.guard_agent = guard_agent
-        self.intermediate_agent = intermediate_agent
+        self.binding_agent = binding_agent
         if self.model and plant_agent is None:
             from code.defense.plant_agent import PlantPlacementAgent
             plant_agent = PlantPlacementAgent(self.model).place
@@ -1386,10 +1031,8 @@ class Engine:
             contract, str(task_id or digest(contract.to_dict())),
             capabilities=getattr(self.plan, "capabilities", {}),
             skills=getattr(self.plan, "skills", {}),
-            acquire_agent=self.acquire_agent, derive_agent=self.derive_agent,
-            support_agent=self.support_agent,
-            guard_agent=self.guard_agent,
-            intermediate_agent=self.intermediate_agent,
+            acquire_agent=self.acquire_agent,
+            binding_agent=self.binding_agent,
             plant_agent=self.plant_agent, plant_cache=self._plant_cache,
             plant_surfaces=getattr(self.plan, "sources", {}),
             approval_enabled=self.approval_enabled,

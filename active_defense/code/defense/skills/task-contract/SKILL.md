@@ -72,7 +72,7 @@ Compute one closed selection or set operation.
 {"id":"c2","type":"conditional","instruction":"Select the record with the maximum task-requested score","operator":"argmax","operands":["c0.records","c1.scores"],"output":"selected_record"}
 ```
 
-The only operators are `identity`, `singleton`, `count`, `map_count`, `union`, `difference`, `argmin`, `argmax`, `aligned_lookup`, `basename`, `path_join`, `gt`, `lt`, `field`, `select_eq`, `add`, `datetime_combine`, `add_duration`, and `interval_free`. An operand is either an exact earlier output reference or `{"literal": VALUE}`. A literal value must be exact trusted-task text/number; the field-name operand of `field` and `select_eq` must instead be an exact property attested by a capability output schema. Never invent a literal selection target.
+The only operators are `identity`, `singleton`, `count`, `map_count`, `union`, `flatten`, `keys`, `project`, `frequency`, `sort_by`, `object_set`, `difference`, `argmin`, `argmax`, `coalesce`, `aligned_lookup`, `basename`, `path_join`, `gt`, `lt`, `field`, `select_eq`, `add`, `multiply`, `percent_of`, `datetime_combine`, `add_duration`, and `interval_free`. An operand is either an exact earlier output reference or `{"literal": VALUE}`. A literal value must be exact trusted-task text/number; field-name operands must instead be exact properties attested by a capability or registered operator output schema. `sort_by` may use only the closed direction tokens `asc` and `desc`, chosen to match an ordering explicitly requested by the trusted task. Never invent a literal selection target.
 
 `gt` and `lt` are three-operand guarded selections: `[candidate, score, threshold]`. They return `candidate` only when the numeric comparison succeeds; otherwise the output remains unresolved, so a downstream Effect cannot execute. Use a Derive from `task` to expose a task-fixed candidate or numeric threshold as an earlier output, and a Derive or Acquire output for the runtime score. Example:
 
@@ -89,7 +89,26 @@ value aligned with a unique selected key. These operators preserve the domain
 alignment established by a quantified Acquire; they do not select semantic
 content or create authority.
 
-`select_eq(items, field, expected)` returns the unique object whose attested field equals the task literal; zero or multiple matches remain unresolved. `field(object, field)` projects one attested property. `add(left,right)` performs exact decimal addition. `datetime_combine(date,time)` combines task literals, `add_duration(start,duration)` adds a task-stated minute/hour duration, and `interval_free(events,start,end)` returns `start` only when no acquired event overlaps the interval. These operators are deterministic proof steps, not semantic recommendations.
+`flatten(collections)` performs a one-level, order-preserving flatten without
+deduplication. `project(items,field)` projects one attested field from every
+record. `frequency(values)` returns stable records shaped as
+`{"value": value, "count": n}`. `sort_by(records,fields,directions)` performs
+a stable lexicographic sort over attested fields, with one `asc` or `desc`
+direction per field. Compose these primitives for generic grouped ranking;
+never invent a domain operator such as `sender_frequency` or
+`most_active_user`.
+
+`keys(object)` deterministically projects the object's keys. `object_set`
+copies an object and sets one attested field to a closed operand value. Use
+these with `singleton` when an Effect schema requires a one-element array of
+structured records. They preserve structure only; they do not decide which
+runtime entity has a task-authorized semantic role.
+
+`coalesce(preferred,fallback)` returns the first operand that already has a
+closed proof. It is only for a task-stated fallback order; it cannot turn an
+unresolved semantic choice into evidence.
+
+`select_eq(items, field, expected)` returns the unique object whose attested field equals the task literal; zero or multiple matches remain unresolved. `field(object, field)` projects one attested property. `add(left,right)` and `multiply(left,right)` perform exact decimal arithmetic; `percent_of(base,percent)` computes `base × percent / 100` when the percentage is fixed by the task. `datetime_combine(date,time)` combines task literals, `add_duration(start,duration)` adds a task-stated minute/hour duration, and `interval_free(events,start,end)` returns `start` only when no acquired event overlaps the interval. These operators are deterministic proof steps, not semantic recommendations.
 
 ### Effect
 

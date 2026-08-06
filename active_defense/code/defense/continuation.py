@@ -9,7 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from code.defense.contract import EffectClause
-from code.defense.state import SEMANTIC_REF, RuntimeState, UNRESOLVED, digest
+from code.defense.resolver import LazyResolver
+from code.defense.state import SEMANTIC_REF, RuntimeState, digest
 
 
 REPAIR = "repair"
@@ -164,6 +165,7 @@ class ContinuationController:
     def _repair_candidates(self, state: RuntimeState, action: str,
                            arguments: dict, required, equal):
         """Yield complete proposals determined only by replayable bindings."""
+        resolver = LazyResolver(state, self.contract)
         for clause in self.contract.clauses:
             if not (isinstance(clause, EffectClause) and
                     clause.action == action):
@@ -184,14 +186,16 @@ class ContinuationController:
                     resolved = []
                     refs = []
                     for source in sources:
-                        value = state.output(source)
-                        binding = state.bindings.get(source.partition(".")[0])
-                        if (value is UNRESOLVED or binding is None or
-                                SEMANTIC_REF in binding.refs):
+                        values = resolver.values(source)
+                        exact = [row for row in values
+                                 if SEMANTIC_REF not in row.refs]
+                        unique = {digest(row.value): row for row in exact}
+                        if len(unique) != 1:
                             resolved = []
                             break
-                        resolved.append(value)
-                        refs.extend(binding.refs)
+                        row = next(iter(unique.values()))
+                        resolved.append(row.value)
+                        refs.extend(row.refs)
                     if not resolved:
                         break
                     value = resolved[0]
@@ -439,6 +443,8 @@ class ContinuationController:
                     for ref in binding.refs if "#" in str(ref))
             clause = clauses.get(source)
             if clause is not None:
+                roots.update(receipt.digest + "#"
+                             for receipt in state.receipts_for(clause.id))
                 pending.extend(clause.sources)
         return roots
 

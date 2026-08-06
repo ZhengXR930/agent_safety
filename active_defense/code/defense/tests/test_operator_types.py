@@ -1,43 +1,76 @@
-"""Closed operator types constrain semantic Binding proposals."""
+"""Closed operator types constrain proposal-local Binding placement."""
 import unittest
 
 from code.defense.contract import (AcquireClause, ConditionalClause,
-                                   DeriveClause, TaskContract)
-from code.defense.proof import materialize_intermediate_derive
-from code.defense.state import Binding, Receipt, RuntimeState
+                                   DeriveClause, EffectClause, TaskContract)
+from code.defense.engine import Episode
 
 
 class OperatorInputBindingTests(unittest.TestCase):
-    def test_add_derive_selects_exact_numeric_span_not_whole_text(self):
-        contract = TaskContract("increase rent by the notice amount", [
+    def test_add_selects_exact_numeric_span_not_whole_text(self):
+        contract = TaskContract("increase rent from 1100 by notice amount", [
             AcquireClause("", "read notice", "read_file", {}, "notice"),
+            DeriveClause("", "current rent", ("task",), "current"),
             DeriveClause("", "rent increase", ("c0.notice",), "increase"),
-            ConditionalClause(
-                "", "compute rent", "add", ("c1.increase", 1100), "rent"),
-        ])
-        state = RuntimeState()
-        receipt = state.record(Receipt(
-            "read_file", {}, "Your monthly rent is increased by 100.00."))
-        state.bind(Binding("c0", "acquire", receipt.value,
-                           (receipt.digest + "#",)))
+            ConditionalClause("", "compute rent", "add",
+                              ("c1.current", "c2.increase"), "rent"),
+            EffectClause("", "update rent", "update", {
+                "amount": {"from": "c3.rent"}})])
+        observed = []
 
-        observed = {}
+        def place(**request):
+            observed.extend(request["goals"])
+            rows = []
+            for goal in request["goals"]:
+                candidate = next(row for row in goal["candidates"]
+                                 if row["value"] in {1100, 100})
+                rows.append({
+                    "goal_id": goal["goal_id"],
+                    "candidate_ids": [candidate["candidate_id"]],
+                    "compose": "scalar"})
+            return {"placements": rows}
 
-        def choose(**request):
-            observed.update(request)
-            candidate = next(row for row in request["candidates"]
-                             if str(row["value"]) == "100.00")
-            return {"candidate_ids": [candidate["id"]], "compose": "scalar"}
+        episode = Episode(
+            contract, "n", binding_agent=place,
+            approval_enabled=False, continuation_enabled=False)
+        episode.observe(
+            "read_file", {}, "Your monthly rent is increased by 100.00.")
+        decision = episode.effect("update", {"amount": 1200})
+        self.assertEqual("pass", decision.route)
+        self.assertEqual({"number"},
+                         {goal["expected_type"] for goal in observed})
+        self.assertTrue(any("@" in ref for ref in decision.refs))
 
-        binding = materialize_intermediate_derive(
-            state, contract, contract.clauses[1], choose=choose)
-        self.assertIsNotNone(binding)
-        self.assertEqual("number", observed["expected_type"])
-        self.assertTrue(all(
-            str(row["value"]).strip() == "100.00"
-            for row in observed["candidates"]))
-        self.assertEqual("100.00", binding.value)
-        self.assertIn("@", binding.refs[0])
+    def test_percent_and_multiply_require_numeric_evidence(self):
+        contract = TaskContract(
+            "pay 19.5 percent of the 1000 purchase plus 5.29", [
+                AcquireClause("", "purchase", "recent", {}, "rows"),
+                DeriveClause("", "purchase amount", ("c0.rows",), "base"),
+                ConditionalClause(
+                    "", "percentage", "percent_of",
+                    ("c1.base", {"literal": 19.5}), "tax"),
+                ConditionalClause(
+                    "", "total", "add",
+                    ("c2.tax", {"literal": 5.29}), "total"),
+                EffectClause("", "pay", "pay", {
+                    "amount": {"from": "c3.total"}})])
+
+        def place(**request):
+            goal = request["goals"][0]
+            selected = next(row for row in goal["candidates"]
+                            if row["value"] == 1000)
+            self.assertEqual("number", goal["expected_type"])
+            return {"placements": [{
+                "goal_id": goal["goal_id"],
+                "candidate_ids": [selected["candidate_id"]],
+                "compose": "scalar"}]}
+
+        episode = Episode(
+            contract, "n", binding_agent=place,
+            approval_enabled=False, continuation_enabled=False)
+        episode.observe("recent", {}, [{"amount": 1000}])
+        self.assertEqual(
+            "pass", episode.effect("pay", {"amount": 200.29}).route)
 
 
 if __name__ == "__main__":

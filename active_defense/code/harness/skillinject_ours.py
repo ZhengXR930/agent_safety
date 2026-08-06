@@ -49,7 +49,10 @@ def main() -> None:
                         help="skip the workspace honey artifact")
     parser.add_argument("--max-turns", type=int, default=14)
     parser.add_argument("--contract-bundle",
-                        help="reviewed mapping from exact task text to Contract")
+                        help="reviewed mapping from a task or pair key to Contract")
+    parser.add_argument(
+        "--contract-key",
+        help="exact bundle key, such as id001_task0; defaults to task text")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
 
@@ -61,10 +64,13 @@ def main() -> None:
     if args.contract_bundle:
         bundle = json.loads(Path(args.contract_bundle).read_text())
         contracts = bundle.get("contracts") if isinstance(bundle, dict) else None
-        raw = contracts.get(args.task) if isinstance(contracts, dict) else None
+        key = args.contract_key or args.task
+        raw = contracts.get(key) if isinstance(contracts, dict) else None
         if not isinstance(raw, dict):
-            raise ValueError("contract bundle has no exact entry for task")
+            raise ValueError(f"contract bundle has no exact entry for {key!r}")
         frozen = TaskContract.from_dict(raw)
+        if frozen.task != args.task:
+            raise ValueError("frozen Contract task does not match --task")
     record = runtime.run(
         args.task,
         attack_tokens=tuple(args.attack_token or DEFAULT_ATTACK_TOKENS),

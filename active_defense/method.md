@@ -942,3 +942,9 @@ trusted literal conflict or a PLANT commitment.
   may then project the proposed scalar from an exact node/span in its declared Receipt scope. This prevents
   a containing message from being frozen as the URL or identifier it merely contains, without predicting a
   Receipt path or granting the source another Effect.
+- 2026-08-06: Replaced persistent single-value materialization with unordered Clause-to-Receipt ownership,
+  monotone fixed-point reconciliation, and proposal-local lazy Binding. Deterministic code enumerates the
+  only admissible exact node/span, list/object composition, and registered-operator candidates; one cached
+  Binding Agent call may select only opaque candidate ids for the whole Effect proposal. Natural-language
+  SemanticSupport remains separate and cannot prove authority-bearing arguments. PLANT still runs immediately
+  when each observation arrives and does not wait for the Receipt set to become complete.

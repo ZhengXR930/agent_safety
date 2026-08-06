@@ -25,7 +25,7 @@ def _capabilities():
 def _episode(**kwargs):
     return Episode(
         _decision_contract(), "dep-nonce", capabilities=_capabilities(),
-        derive_agent=lambda **_request: True, approval_enabled=False, **kwargs)
+        approval_enabled=False, **kwargs)
 
 
 class AuthoritySufficiencyTests(unittest.TestCase):

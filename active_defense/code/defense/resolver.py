@@ -16,9 +16,13 @@ from decimal import Decimal, InvalidOperation
 from datetime import datetime, timedelta
 import re
 
-from code.defense.contract import ConditionalClause, DeriveClause
+from dataclasses import dataclass
+from itertools import product
+
+from code.defense.contract import (AcquireClause, ConditionalClause,
+                                   DeriveClause)
 from code.defense.state import (Binding, CONTEXT_REF, QUERY_REF, SEMANTIC_REF,
-                                RuntimeState, UNRESOLVED)
+                                Receipt, RuntimeState, UNRESOLVED, stable)
 
 _TRUSTED_INPUT_REFS = {"task": QUERY_REF, "runtime-context": CONTEXT_REF}
 
@@ -29,22 +33,30 @@ def operator_operand_type(operator: str, index: int) -> str:
     This is part of the operator algebra, not a benchmark policy.  ``any``
     means the operator imposes no useful precondition at that position.
     """
-    if operator == "add":
+    if operator in {"add", "multiply", "percent_of"}:
         return "number"
     if operator in {"gt", "lt"}:
         return "number" if index in {1, 2} else "any"
     if operator in {"argmax", "argmin"}:
         return "number-list" if index == 1 else "collection"
-    if operator == "count":
+    if operator in {"count", "frequency"}:
         return "collection"
-    if operator == "map_count":
+    if operator in {"map_count", "flatten"}:
         return "collection-list"
     if operator == "union":
         return "collection-list"
     if operator == "difference":
         return "collection"
+    if operator == "keys":
+        return "object"
     if operator == "field":
         return "string" if index == 1 else "object"
+    if operator == "project":
+        return "string" if index == 1 else "collection"
+    if operator == "object_set":
+        return "object" if index == 0 else "string" if index == 1 else "any"
+    if operator == "sort_by":
+        return "collection"
     if operator == "select_eq":
         return ("collection" if index == 0 else
                 "string" if index == 1 else "any")
@@ -118,6 +130,9 @@ def replay_operator(operator: str, operands: list):
     """Replay one closed Conditional operator; raise on an unknown operator."""
     if operator == "identity":
         return operands[0]
+    if operator == "coalesce":
+        return next((value for value in operands if value is not UNRESOLVED),
+                    UNRESOLVED)
     if operator == "singleton":
         return [operands[0]]
     if operator == "count":
@@ -130,6 +145,12 @@ def replay_operator(operator: str, operands: list):
                for group in groups):
             raise ValueError("map_count items must be collections")
         return [len(group) for group in groups]
+    if operator == "flatten":
+        groups = operands[0]
+        if not isinstance(groups, (list, tuple)) or any(
+                not isinstance(group, (list, tuple)) for group in groups):
+            raise ValueError("flatten needs a collection of collections")
+        return [item for group in groups for item in group]
     if operator == "union":
         groups = operands[0]
         if not isinstance(groups, (list, tuple)) or any(
@@ -153,6 +174,62 @@ def replay_operator(operator: str, operands: list):
         if hasattr(value, field):
             return getattr(value, field)
         raise ValueError("field is absent")
+    if operator == "keys":
+        value = operands[0]
+        if not isinstance(value, dict):
+            raise ValueError("keys needs an object")
+        return list(value)
+    if operator == "project":
+        items, field = operands
+        if not isinstance(items, (list, tuple)) or not isinstance(field, str):
+            raise ValueError("project needs a collection and field")
+        projected = []
+        for item in items:
+            if isinstance(item, dict) and field in item:
+                projected.append(item[field])
+            elif hasattr(item, field):
+                projected.append(getattr(item, field))
+            else:
+                raise ValueError("project field is absent")
+        return projected
+    if operator == "object_set":
+        value, field, child = operands
+        if not isinstance(value, dict) or not isinstance(field, str):
+            raise ValueError("object_set needs an object and field")
+        return {**value, field: child}
+    if operator == "frequency":
+        items = operands[0]
+        if not isinstance(items, (list, tuple)):
+            raise ValueError("frequency needs a collection")
+        records, positions = [], {}
+        for item in items:
+            key = stable(item)
+            if key not in positions:
+                positions[key] = len(records)
+                records.append({"value": item, "count": 0})
+            records[positions[key]]["count"] += 1
+        return records
+    if operator == "sort_by":
+        items, fields, directions = operands
+        if (not isinstance(items, (list, tuple)) or
+                not isinstance(fields, (list, tuple)) or not fields or
+                not isinstance(directions, (list, tuple)) or
+                len(fields) != len(directions) or
+                any(direction not in {"asc", "desc"}
+                    for direction in directions)):
+            raise ValueError("sort_by needs aligned fields and directions")
+        result = list(items)
+        for field, direction in reversed(list(zip(fields, directions))):
+            if not isinstance(field, str):
+                raise ValueError("sort_by fields must be strings")
+            try:
+                result.sort(
+                    key=lambda item: (item[field] if isinstance(item, dict)
+                                      else getattr(item, field)),
+                    reverse=direction == "desc")
+            except (KeyError, AttributeError, TypeError):
+                raise ValueError("sort_by field is absent or incomparable")
+        return result
     if operator == "select_eq":
         items, field, expected = operands
         if not isinstance(items, (list, tuple)) or not isinstance(field, str):
@@ -161,6 +238,8 @@ def replay_operator(operator: str, operands: list):
         def equal(left, right):
             if isinstance(left, str) and isinstance(right, str):
                 return left.casefold() == right.casefold()
+            if (_is_number(left) and _is_number(right)):
+                return Decimal(str(left)) == Decimal(str(right))
             return type(left) is type(right) and left == right
 
         matches = []
@@ -181,6 +260,18 @@ def replay_operator(operator: str, operands: list):
         except (InvalidOperation, ValueError):
             raise ValueError("add operands must be numeric")
         return int(total) if total == total.to_integral() else float(total)
+    if operator in {"multiply", "percent_of"}:
+        if any(isinstance(value, bool) for value in operands):
+            raise ValueError(f"{operator} operands must be numeric")
+        try:
+            left, right = (Decimal(str(value)) for value in operands)
+            result = left * right
+            if operator == "percent_of":
+                result /= Decimal(100)
+        except (InvalidOperation, ValueError):
+            raise ValueError(f"{operator} operands must be numeric")
+        return (int(result) if result == result.to_integral()
+                else float(result))
     if operator == "datetime_combine":
         date, time = map(str, operands)
         return datetime.fromisoformat(date + "T" + time).strftime(
@@ -188,12 +279,14 @@ def replay_operator(operator: str, operands: list):
     if operator == "add_duration":
         start, duration = operands
         match = re.fullmatch(
-            r"\s*(\d+(?:\.\d+)?)?\s*(minute|minutes|hour|hours)\s*",
+            r"\s*(\d+(?:\.\d+)?)?\s*(?:-\s*)?"
+            r"(minute|minutes|hour|hours)\s*",
             str(duration), re.I)
         if not match:
             words = {"one": 1, "two": 2, "three": 3, "four": 4}
             match = re.fullmatch(
-                r"\s*(one|two|three|four)\s*(minute|minutes|hour|hours)\s*",
+                r"\s*(one|two|three|four)\s*(?:-\s*)?"
+                r"(minute|minutes|hour|hours)\s*",
                 str(duration), re.I)
             if not match:
                 raise ValueError("unsupported duration")
@@ -319,3 +412,202 @@ def resolve_derive(state: RuntimeState, clause: DeriveClause, value, *,
                                      if ref not in {QUERY_REF, CONTEXT_REF}))
     return state.bind(Binding(clause.id, "derive", value,
                               tuple(dict.fromkeys(semantic_refs))))
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """One proposal-local value over the current unordered Receipt snapshot."""
+    value: object
+    refs: tuple[str, ...]
+    receipt: Receipt | None = None
+
+
+def _value_nodes(value):
+    yield value
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _value_nodes(child)
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            yield from _value_nodes(child)
+
+
+class LazyResolver:
+    """Order-independent Clause evaluation for one proposal/snapshot.
+
+    Persistent state owns only Clause→Receipt edges. Semantic placements and
+    derived values live in this resolver's memo and are discarded after the
+    proposal. A later Receipt therefore changes the snapshot rather than being
+    ignored behind a first-arrival Binding.
+    """
+
+    def __init__(self, state: RuntimeState, contract, placements=None):
+        self.state = state
+        self.contract = contract
+        self.placements = dict(placements or {})
+        self.memo: dict[str, tuple[Resolved, ...]] = {}
+        self.by_ref = {
+            clause.output_ref: clause for clause in contract.clauses
+            if clause.output_ref}
+
+    @staticmethod
+    def _equal(left, right) -> bool:
+        return type(left) is type(right) and left == right
+
+    def call_matches(self, clause: AcquireClause, arguments: dict) -> bool:
+        """Whether call arguments follow literals/current upstream values."""
+        arguments = dict(arguments or {})
+        for name, spec in clause.call_arguments.items():
+            if name not in arguments:
+                return False
+            proposed = arguments[name]
+            if isinstance(spec, dict) and set(spec) == {"literal"}:
+                if spec["literal"] != proposed:
+                    return False
+                continue
+            if isinstance(spec, dict) and set(spec) == {"from"}:
+                raw = spec["from"]
+                sources = [raw] if isinstance(raw, str) else list(raw or ())
+                values = [item for source in sources for item in self.values(source)]
+                if not values or not any(
+                        self._equal(node, proposed)
+                        for item in values for node in _value_nodes(item.value)):
+                    return False
+                continue
+            if spec != proposed:
+                return False
+        return True
+
+    def values(self, ref: str, resolving=frozenset()) -> tuple[Resolved, ...]:
+        ref = str(ref)
+        if ref in self.memo:
+            return self.memo[ref]
+        if ref in resolving:
+            return ()
+        clause = self.by_ref.get(ref)
+        if clause is None:
+            return ()
+        resolving = resolving | {ref}
+
+        if isinstance(clause, AcquireClause):
+            rows = []
+            for receipt in self.state.receipts_for(clause.id):
+                if (receipt.capability == clause.capability and
+                        self.call_matches(clause, receipt.arguments)):
+                    rows.append(Resolved(
+                        receipt.value, (receipt.digest + "#",), receipt))
+            self.memo[ref] = tuple(rows)
+            return self.memo[ref]
+
+        if isinstance(clause, DeriveClause):
+            placed = tuple(self.placements.get(ref, ()))
+            if placed:
+                self.memo[ref] = placed
+                return placed
+            binding = self.state.bindings.get(clause.id)
+            if binding is not None and binding.kind != "acquire":
+                self.memo[ref] = (Resolved(binding.value, binding.refs),)
+                return self.memo[ref]
+            self.memo[ref] = ()
+            return ()
+
+        if isinstance(clause, ConditionalClause):
+            groups = []
+            for operand in clause.operands:
+                if isinstance(operand, dict) and set(operand) == {"literal"}:
+                    groups.append([Resolved(operand["literal"], (QUERY_REF,))])
+                else:
+                    groups.append(list(self.values(str(operand), resolving)))
+            result = self._apply(clause.operator, groups)
+            self.memo[ref] = tuple(result)
+            return self.memo[ref]
+        return ()
+
+    @staticmethod
+    def _expanded(rows):
+        output = []
+        for row in rows:
+            if isinstance(row.value, dict):
+                output.extend(Resolved(
+                    value, row.refs, row.receipt) for value in row.value.values())
+            elif isinstance(row.value, (list, tuple)):
+                output.extend(Resolved(
+                    value, row.refs, row.receipt) for value in row.value)
+            else:
+                output.append(row)
+        return output
+
+    @staticmethod
+    def _combine_refs(rows):
+        return tuple(dict.fromkeys(ref for row in rows for ref in row.refs))
+
+    def _apply(self, operator: str, groups: list[list[Resolved]]):
+        if operator == "coalesce":
+            return next((tuple(group) for group in groups if group), ())
+        if not groups or any(not group for group in groups):
+            return ()
+        if operator == "identity":
+            return tuple(groups[0])
+        if operator == "singleton":
+            if len(groups[0]) != 1:
+                return ()
+            row = groups[0][0]
+            return (Resolved([row.value], row.refs, row.receipt),)
+        if operator in {"union", "flatten"}:
+            collections = [row.value for row in groups[0]]
+            try:
+                value = replay_operator(operator, [collections])
+            except (TypeError, ValueError):
+                return ()
+            return (Resolved(value, self._combine_refs(groups[0])),)
+        if operator == "map_count":
+            collections = [row.value for row in groups[0]]
+            try:
+                value = replay_operator("map_count", [collections])
+            except (TypeError, ValueError):
+                return ()
+            return (Resolved(value, self._combine_refs(groups[0])),)
+        if operator in {"argmin", "argmax"}:
+            left, right = self._expanded(groups[0]), self._expanded(groups[1])
+            if (len(groups[0]) == len(groups[1]) == 1 and
+                    len(left) == len(right) and left):
+                pairs = list(zip(left, right))
+            else:
+                pairs = []
+                for candidate in left:
+                    matches = [score for score in right
+                               if score.receipt is not None and any(
+                                   self._equal(node, candidate.value)
+                                   for node in _value_nodes(
+                                       score.receipt.arguments))]
+                    if len(matches) != 1:
+                        return ()
+                    pairs.append((candidate, matches[0]))
+            if not pairs:
+                return ()
+            try:
+                selected = (min if operator == "argmin" else max)(
+                    pairs, key=lambda pair: pair[1].value)
+            except (TypeError, ValueError):
+                return ()
+            item, score = selected
+            return (Resolved(
+                item.value, tuple(dict.fromkeys(item.refs + score.refs)),
+                item.receipt),)
+
+        output = []
+        for combination in product(*groups):
+            try:
+                value = replay_operator(
+                    operator, [item.value for item in combination])
+            except (IndexError, TypeError, ValueError):
+                continue
+            if value is UNRESOLVED:
+                continue
+            output.append(Resolved(
+                value, self._combine_refs(combination),
+                combination[0].receipt if len(combination) == 1 else None))
+        unique = {}
+        for row in output:
+            unique.setdefault(stable(row.value), row)
+        return tuple(unique.values())

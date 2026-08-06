@@ -6,11 +6,13 @@ from .model import is_clause_ref
 
 OPERATOR_ARITY = {
     "identity": 1, "singleton": 1, "count": 1, "map_count": 1,
-    "union": 1,
-    "difference": 2, "argmin": 2, "argmax": 2,
-    "aligned_lookup": 3,
+    "union": 1, "flatten": 1, "keys": 1, "frequency": 1,
+    "difference": 2, "argmin": 2, "argmax": 2, "coalesce": 2,
+    "aligned_lookup": 3, "object_set": 3, "sort_by": 3,
     "basename": 1, "path_join": 2, "gt": 3, "lt": 3,
-    "field": 2, "select_eq": 3, "add": 2,
+    "field": 2, "project": 2, "select_eq": 3,
+    "add": 2, "multiply": 2,
+    "percent_of": 2,
     "datetime_combine": 2, "add_duration": 2, "interval_free": 3,
 }
 
@@ -201,12 +203,23 @@ def validate_contract(data, trusted_task, actions, environment_sources,
                         continue
                     literal = operand["literal"]
                     field_position = (
-                        (operator == "field" and position == 1) or
+                        (operator in {"field", "project", "object_set"} and
+                         position == 1) or
                         (operator == "select_eq" and position == 1))
                     if field_position:
                         valid_operands &= (
                             isinstance(literal, str) and
                             literal in attested_fields)
+                    elif operator == "sort_by" and position == 1:
+                        valid_operands &= (
+                            isinstance(literal, list) and bool(literal) and
+                            all(isinstance(item, str) and
+                                item in (attested_fields | {"value", "count"})
+                                for item in literal))
+                    elif operator == "sort_by" and position == 2:
+                        valid_operands &= (
+                            isinstance(literal, list) and bool(literal) and
+                            all(item in {"asc", "desc"} for item in literal))
                     else:
                         valid_operands &= task_literal(literal)
             if (arity is None or not isinstance(operands, list) or

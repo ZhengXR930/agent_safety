@@ -1,10 +1,10 @@
-"""Task-local materialization of missing non-Effect evidence paths.
+"""One constrained proposal-time Binding placement over unordered Receipts.
 
-The trusted TaskContract never changes. A supporting clause only binds one
-existing unresolved role consumed by an existing Root Effect, using Receipts
-recorded by the current Episode.  A delegated proof is proposal-local: it
-instantiates one declared argument without mutating the ClauseBinding table.
-Neither form can create an Effect.
+Persistent state owns only Clause→Receipt edges.  This module builds all
+unresolved semantic goals from the current Receipt snapshot, enumerates their
+Clause-reachable evidence, and asks one Binding Agent to select opaque ids.
+The Agent never writes a Receipt ref, span, value, operator, Clause, or Effect.
+Code projects exact node/span/list/object values and replays every Conditional.
 """
 from __future__ import annotations
 
@@ -14,100 +14,85 @@ import re
 
 from code.defense.contract import (AcquireClause, ConditionalClause,
                                    DeriveClause, EffectClause)
-from code.defense.receipt_binding import literal_arguments_compatible
-from code.defense.resolver import (operator_operand_type,
-                                   operator_value_matches, replay_operator)
-from code.defense.state import (Binding, QUERY_REF, RuntimeState, UNRESOLVED,
-                                stable)
+from code.defense.resolver import (LazyResolver, Resolved,
+                                   operator_operand_type,
+                                   operator_value_matches)
+from code.defense.state import QUERY_REF, SEMANTIC_REF, RuntimeState, stable
 
 
 @dataclass(frozen=True)
-class SupportingClause:
-    """Ephemeral evidence edge from exact Receipt nodes to one Contract role."""
-    kind: str
+class BindingGoal:
+    id: str
+    clause_id: str
+    argument: str
     target_ref: str
-    receipt_refs: tuple[str, ...]
-    operator: str = ""
+    instruction: str
+    mode: str                 # intermediate | direct | delegated
+    expected_type: str
+    proposed: object
+    allow_semantic: bool
+    candidates: tuple[dict, ...]
 
-    def to_dict(self) -> dict:
-        data = {
-            "type": self.kind,
-            "target": self.target_ref,
-            "receipts": list(self.receipt_refs),
+    def public(self) -> dict:
+        compose = (["list"] if self.mode != "intermediate" and
+                   isinstance(self.proposed, (list, tuple)) else
+                   ["object"] if self.mode != "intermediate" and
+                   isinstance(self.proposed, dict) else
+                   ["scalar", "list"] if self.expected_type == "number-list"
+                   else ["scalar"])
+        return {
+            "goal_id": self.id,
+            "argument": self.argument,
+            "role": self.instruction,
+            "mode": self.mode,
+            "expected_type": self.expected_type,
+            "proposed": None if self.mode == "intermediate" else self.proposed,
+            "allowed_compose": compose,
+            "candidates": [
+                {"candidate_id": row["id"], "value": row["value"]}
+                for row in self.candidates],
         }
-        if self.operator:
-            data["operator"] = self.operator
-        return data
 
 
-def _nodes(state: RuntimeState) -> list[dict]:
-    """Enumerate code-owned Receipt roots and exact scalar JSON nodes."""
-    rows = []
-
-    def walk(value, ref, path):
-        if path or not isinstance(value, (dict, list, tuple)):
-            rows.append({
-                "id": "r" + str(len(rows)), "ref": ref + path, "value": value})
-        if isinstance(value, dict):
-            for key, child in value.items():
-                part = str(key).replace("~", "~0").replace("/", "~1")
-                walk(child, ref, path + "/" + part)
-        elif isinstance(value, (list, tuple)):
-            for index, child in enumerate(value):
-                walk(child, ref, path + "/" + str(index))
-
-    for receipt in state.receipts:
-        # The structured root is useful for semantic Derive, while scalar nodes
-        # preserve precise provenance for recipients, URLs, accounts and IDs.
-        rows.append({
-            "id": "r" + str(len(rows)), "ref": receipt.digest + "#",
-            "value": receipt.value, "capability": receipt.capability,
-            "arguments": receipt.arguments,
-            "effect_return": receipt.effect_return})
-        # Effect-return arguments are facts of the authorized call and often
-        # carry the exact created helper/resource identity needed downstream.
-        # Keep them in the same immutable Receipt, under a disjoint JSON-pointer
-        # namespace, rather than inventing a second evidence object.
-        if receipt.arguments:
-            walk(receipt.arguments, receipt.digest + "#", "/$arguments")
-        if isinstance(receipt.value, (dict, list, tuple)):
-            walk(receipt.value, receipt.digest + "#", "")
-    return rows
+def _nodes(value, ref):
+    yield value, ref
+    if isinstance(value, dict):
+        for key, child in value.items():
+            part = str(key).replace("~", "~0").replace("/", "~1")
+            yield from _nodes(child, ref + "/" + part)
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            yield from _nodes(child, ref + "/" + str(index))
 
 
-def _numeric_candidates(value, ref: str, prefix: str) -> list[dict]:
-    """Enumerate exact numeric JSON nodes and numeric text spans."""
-    rows = []
-
-    def add(number, exact_ref):
-        rows.append({"id": prefix + str(len(rows)),
-                     "ref": exact_ref, "value": number})
-
-    def walk(node, path):
-        if isinstance(node, bool):
-            return
-        if isinstance(node, (int, float)):
-            add(node, ref + path)
-            return
-        if isinstance(node, str):
-            for match in re.finditer(
-                    r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w|\.\d)",
-                                     node):
-                add(match.group(0), ref + path +
-                    f"@{match.start()}:{match.end()}")
-            return
-        if isinstance(node, dict):
-            for key, child in node.items():
-                part = str(key).replace("~", "~0").replace("/", "~1")
-                walk(child, path + "/" + part)
-        elif isinstance(node, (list, tuple)):
-            for index, child in enumerate(node):
-                walk(child, path + "/" + str(index))
-
-    walk(value, "")
-    return rows
+def _numeric_spans(value, ref):
+    if not isinstance(value, str):
+        return
+    for match in re.finditer(r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w|\.\d)", value):
+        number = Decimal(match.group(0))
+        parsed = (int(number) if number == number.to_integral()
+                  else float(number))
+        yield parsed, f"{ref}@{match.start()}:{match.end()}"
 
 
+def _typed_spans(value, ref, expected_type):
+    # Numbers are self-describing exact spans even when an upstream schema
+    # cannot propagate a narrower type through a generic equality operator.
+    # Enumerating them does not interpret their role; the Agent may only pick
+    # one of these code-issued spans and replay still checks the operator.
+    if expected_type in {"any", "number", "number-list"}:
+        yield from _numeric_spans(value, ref) or ()
+    if not isinstance(value, str) or expected_type not in {"string", "datetime"}:
+        return
+    patterns = (
+        r"\b\d{4}-\d{2}-\d{2}(?:[ T]\d{1,2}:\d{2})?\b",
+        r"\b\d{1,2}:\d{2}\b",
+        r"\b(?:one|two|three|four|\d+(?:\.\d+)?)\s+"
+        r"(?:minute|minutes|hour|hours)\b",
+    )
+    for pattern in patterns:
+        for match in re.finditer(pattern, value, re.I):
+            yield match.group(0), f"{ref}@{match.start()}:{match.end()}"
 
 
 def _source_leaves(value, ref):
@@ -122,22 +107,21 @@ def _source_leaves(value, ref):
         yield value, ref
 
 
-def _project_scalar(value, selected) -> tuple[str, ...]:
-    """Find one exact/canonical scalar node or text span without type lists."""
-    exact = []
-    spans = []
+def _project_scalar(value, selected):
+    exact, spans = [], []
     for row in selected:
         for leaf, ref in _source_leaves(row["value"], row["ref"]):
             if leaf == value and type(leaf) is type(value):
-                exact.append(ref)
-                continue
-            if isinstance(value, str) and isinstance(leaf, str):
-                start = leaf.find(value)
-                if start >= 0 and leaf.find(value, start + len(value)) < 0:
-                    spans.append(f"{ref}@{start}:{start + len(value)}")
-                continue
-            if (isinstance(value, (int, float)) and not isinstance(value, bool)
-                    and isinstance(leaf, str)):
+                exact.extend(row.get("refs") or (ref,))
+            elif isinstance(value, str) and isinstance(leaf, str) and value:
+                starts = [item.start() for item in re.finditer(
+                    re.escape(value), leaf)]
+                if len(starts) == 1:
+                    start = starts[0]
+                    spans.extend(row.get("refs") or
+                                 (f"{ref}@{start}:{start + len(value)}",))
+            elif (isinstance(value, (int, float)) and
+                  not isinstance(value, bool) and isinstance(leaf, str)):
                 for match in re.finditer(
                         r"(?<![\w.])-?\d+(?:\.\d+)?(?!\w|\.\d)", leaf):
                     try:
@@ -145,393 +129,279 @@ def _project_scalar(value, selected) -> tuple[str, ...]:
                     except (InvalidOperation, ValueError):
                         same = False
                     if same:
-                        spans.append(
-                            f"{ref}@{match.start()}:{match.end()}")
+                        spans.extend(row.get("refs") or
+                                     (f"{ref}@{match.start()}:{match.end()}",))
     witnesses = list(dict.fromkeys(exact or spans))
-    return (tuple(witnesses) if len(witnesses) == 1 else ())
+    return tuple(witnesses) if len(witnesses) == 1 else ()
 
 
-def _project_value(value, selected) -> tuple[str, ...]:
-    """Proof for exact node/span or recursive list/object composition."""
+def project_value(value, selected):
+    """Replay exact node/span or recursive list/object composition."""
     for row in selected:
         if stable(row["value"]) == stable(value):
-            return (row["ref"],)
+            return tuple(row.get("refs") or (row["ref"],))
     if isinstance(value, dict):
         refs = []
         for child in value.values():
-            child_refs = _project_value(child, selected)
-            if not child_refs:
+            proof = project_value(child, selected)
+            if not proof:
                 return ()
-            refs.extend(child_refs)
+            refs.extend(proof)
         return tuple(dict.fromkeys(refs)) if value else ()
     if isinstance(value, (list, tuple)):
         refs = []
         for child in value:
-            child_refs = _project_value(child, selected)
-            if not child_refs:
+            proof = project_value(child, selected)
+            if not proof:
                 return ()
-            refs.extend(child_refs)
+            refs.extend(proof)
         return tuple(dict.fromkeys(refs)) if value else ()
     return _project_scalar(value, selected)
 
-def _binding_refs(state: RuntimeState, ref: str) -> tuple[str, ...]:
-    binding = state.bindings.get(str(ref).partition(".")[0])
-    return binding.refs if binding is not None else ()
+
+def _reachable_receipts(state, contract, target_ref):
+    by_ref = {clause.output_ref: clause for clause in contract.clauses
+              if clause.output_ref}
+    found = {}
+
+    def visit(ref, seen=frozenset()):
+        ref = str(ref)
+        if ref in seen:
+            return
+        clause = by_ref.get(ref)
+        if isinstance(clause, AcquireClause):
+            for receipt in state.receipts_for(clause.id):
+                found[receipt.digest] = receipt
+        elif isinstance(clause, DeriveClause):
+            for source in clause.input_refs:
+                if source != "task":
+                    visit(source, seen | {ref})
+        elif isinstance(clause, ConditionalClause):
+            for source in clause.operand_refs:
+                visit(source, seen | {ref})
+
+    clause = by_ref.get(str(target_ref))
+    task_reachable = isinstance(clause, DeriveClause) and "task" in clause.input_refs
+    visit(target_ref)
+    return tuple(found.values()), task_reachable
 
 
-def materialize_intermediate_derive(
-        state: RuntimeState, contract, clause: DeriveClause, *, choose=None
-        ) -> Binding | None:
-    """Resolve one ready intermediate Derive from exact reachable evidence.
+def _candidate_rows(state, contract, target_ref, expected_type):
+    receipts, task_reachable = _reachable_receipts(
+        state, contract, target_ref)
+    rows = []
+    if task_reachable:
+        rows.append({"ref": QUERY_REF, "value": contract.task})
+        rows.extend({"ref": ref, "value": value}
+                    for value, ref in _typed_spans(
+                        contract.task, QUERY_REF, expected_type) or ())
+    for receipt in receipts:
+        for value, ref in _nodes(receipt.value, receipt.digest + "#"):
+            rows.append({"ref": ref, "value": value})
+            rows.extend({"ref": span_ref, "value": span_value}
+                        for span_value, span_ref in
+                        (_typed_spans(value, ref, expected_type) or ()))
+        if receipt.arguments:
+            for value, ref in _nodes(
+                    receipt.arguments, receipt.digest + "#/$arguments"):
+                rows.append({"ref": ref, "value": value})
 
-    The semantic agent selects candidate ids and a scalar/list composition; it
-    never emits a value or provenance reference. Code restricts candidates to
-    Receipt roots already backing the Derive inputs and constructs the value.
-    """
-    if choose is None or clause.id in state.bindings:
-        return None
-    inputs = {}
-    allowed_roots = set()
-    for input_ref in clause.input_refs:
-        if input_ref == "task":
-            inputs[input_ref] = contract.task
+    # A semantic role may consume a value produced by an already-closed
+    # Conditional (for example keys(object) or sort_by(records,...)). Expose
+    # those replayed outputs as code-owned candidates; the Agent still sees
+    # only opaque ids and cannot invent a value, ref, operator, or scope.
+    by_ref = {clause.output_ref: clause for clause in contract.clauses
+              if clause.output_ref}
+    target = by_ref.get(str(target_ref))
+    if isinstance(target, DeriveClause):
+        resolver = LazyResolver(state, contract)
+        for source in target.input_refs:
+            if source in {"task", "runtime-context"}:
+                continue
+            # Acquire values are already enumerated above with their exact
+            # JSON node/span locators. Re-emitting them here would coarsen a
+            # precise span into the Conditional's aggregate provenance. Only
+            # closed replay outputs add genuinely new candidate values.
+            if not isinstance(by_ref.get(str(source)), ConditionalClause):
+                continue
+            for resolved in resolver.values(source):
+                if not resolved.refs:
+                    continue
+                for value, ref in _nodes(resolved.value, "<replay>:" + source):
+                    rows.append({"ref": ref, "refs": resolved.refs,
+                                 "value": value})
+    unique, seen = [], set()
+    for row in rows:
+        key = (row["ref"], tuple(row.get("refs") or ()),
+               stable(row["value"]))
+        if key not in seen:
+            seen.add(key)
+            unique.append({**row, "id": "n" + str(len(unique))})
+    return tuple(unique)
+
+
+def _collect_leaves(contract, ref, expected, found, seen=frozenset()):
+    by_ref = {clause.output_ref: clause for clause in contract.clauses
+              if clause.output_ref}
+    ref = str(ref)
+    if ref in seen:
+        return
+    clause = by_ref.get(ref)
+    if isinstance(clause, (AcquireClause, DeriveClause)):
+        found.setdefault(ref, set()).add(expected)
+    elif isinstance(clause, ConditionalClause):
+        for index, operand in enumerate(clause.operands):
+            if isinstance(operand, str) and operand in by_ref:
+                _collect_leaves(
+                    contract, operand,
+                    operator_operand_type(clause.operator, index), found,
+                    seen | {ref})
+
+
+def compile_goals(state: RuntimeState, contract, action, arguments, surface,
+                  equal):
+    resolver = LazyResolver(state, contract)
+    goals, immediate, immediate_delegated, seen = [], {}, {}, set()
+    effects = [clause for clause in contract.clauses
+               if isinstance(clause, EffectClause) and clause.action == action]
+    for effect in effects:
+        for name, spec in effect.effect_arguments.items():
+            if name not in arguments or not isinstance(spec, dict) or "from" not in spec:
+                continue
+            raw = spec["from"]
+            sources = [raw] if isinstance(raw, str) else list(raw or ())
+            matches = [row for source in sources for row in resolver.values(source)
+                       if equal(name, row.value, arguments[name])]
+            if matches:
+                refs = tuple(dict.fromkeys(
+                    ref for row in matches for ref in row.refs))
+                target = (immediate_delegated
+                          if spec.get("delegated") is True else immediate)
+                target[(effect.id, name)] = refs
+                continue
+
+            leaves = {}
+            for source in sources:
+                _collect_leaves(contract, source, "any", leaves)
+            direct = len(leaves) == 1 and any(str(source) in leaves for source in sources)
+            delegated = (set(spec) == {"from", "delegated"} and
+                         spec.get("delegated") is True)
+            for target_ref, kinds in leaves.items():
+                # A closed suffix can already consume this value. Only a
+                # direct Effect projection still needs the Agent to select the
+                # exact node within an acquired collection.
+                if not direct and resolver.values(target_ref):
+                    continue
+                key = (effect.id, name, target_ref)
+                if key in seen:
+                    continue
+                seen.add(key)
+                concrete = kinds - {"any"}
+                expected = (next(iter(concrete)) if len(concrete) == 1 else
+                            "any" if not concrete else "conflict")
+                if expected == "conflict":
+                    continue
+                clause = next(item for item in contract.clauses
+                              if item.output_ref == target_ref)
+                rows = list(_candidate_rows(
+                    state, contract, target_ref, expected))
+                if not direct:
+                    rows = [row for row in rows
+                            if operator_value_matches(expected, row["value"])]
+                if not rows:
+                    continue
+                mode = ("delegated" if delegated and direct else
+                        "direct" if direct else "intermediate")
+                goal_id = "g" + str(len(goals))
+                rows = tuple({**row, "id": goal_id + "." + row["id"]}
+                             for row in rows)
+                goals.append(BindingGoal(
+                    goal_id, effect.id, name, target_ref,
+                    clause.instruction, mode, expected,
+                    arguments[name] if direct else None,
+                    bool(direct and not delegated and surface is not None and
+                         surface.accepts_semantic_support(name)), rows))
+    return tuple(goals), immediate, immediate_delegated
+
+
+def apply_placements(state, contract, action, arguments, surface, goals,
+                     immediate, immediate_delegated, proposal, equal):
+    """Validate id-only placements and return ordinary/delegated proof refs."""
+    rows = proposal.get("placements") if isinstance(proposal, dict) else None
+    if not isinstance(rows, list):
+        rows = []
+    by_goal = {goal.id: goal for goal in goals}
+    selected = {}
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {
+                "goal_id", "candidate_ids", "compose"}:
+            return {}, {}, {}
+        goal = by_goal.get(str(row.get("goal_id")))
+        ids, compose = row.get("candidate_ids"), row.get("compose")
+        allowed = set(goal.public()["allowed_compose"]) if goal else set()
+        if (goal is None or goal.id in selected or
+                not isinstance(ids, list) or not ids or
+                len(set(map(str, ids))) != len(ids) or compose not in allowed):
+            return {}, {}, {}
+        choices = {item["id"]: item for item in goal.candidates}
+        if any(str(item) not in choices for item in ids):
+            return {}, {}, {}
+        selected[goal.id] = (compose, [choices[str(item)] for item in ids])
+
+    placements, direct_exact, direct_semantic = {}, {}, {}
+    delegated = dict(immediate_delegated)
+    for goal in goals:
+        choice = selected.get(goal.id)
+        if choice is None:
             continue
-        value = state.output(input_ref)
-        if value is UNRESOLVED:
-            return None
-        inputs[input_ref] = value
-        for ref in _binding_refs(state, input_ref):
-            if "#" in ref:
-                allowed_roots.add(ref.split("#", 1)[0] + "#")
-    if not allowed_roots:
-        return None
-
-    candidates = [
-        row for row in _nodes(state)
-        if any(str(row["ref"]).startswith(root) for root in allowed_roots)
-    ]
-    for receipt in state.receipts:
-        root = receipt.digest + "#"
-        if root in allowed_roots:
-            candidates.extend(_numeric_candidates(
-                receipt.value, root, "numeric"))
-
-    requirements = {
-        operator_operand_type(consumer.operator, index)
-        for consumer in contract.clauses
-        if isinstance(consumer, ConditionalClause)
-        for index, operand in enumerate(consumer.operand_refs)
-        if operand == clause.output_ref
-    } - {"any"}
-    if len(requirements) > 1:
-        return None
-    requirement = next(iter(requirements), "any")
-
-    # The Agent may select exact nodes/spans, but a downstream closed operator
-    # owns their admissible type.  For a numeric list, individual exact numeric
-    # witnesses may be composed into the list; other requirements validate the
-    # selected value after composition below.
-    if requirement == "number":
-        candidates = [row for row in candidates
-                      if operator_value_matches("number", row["value"])]
-    elif requirement == "number-list":
-        candidates = [row for row in candidates
-                      if (operator_value_matches("number", row["value"]) or
-                          operator_value_matches("number-list", row["value"]))]
-
-    unique = []
-    seen = set()
-    for row in candidates:
-        key = (str(row["ref"]), stable(row["value"]))
-        if key in seen:
+        compose, candidates = choice
+        if goal.mode == "intermediate":
+            if compose == "scalar" and len(candidates) != 1:
+                continue
+            value = (candidates[0]["value"] if compose == "scalar" else
+                     [item["value"] for item in candidates])
+            if not operator_value_matches(goal.expected_type, value):
+                continue
+            refs = tuple(dict.fromkeys(
+                ref for item in candidates
+                for ref in (item.get("refs") or (item["ref"],))))
+            placements[goal.target_ref] = (Resolved(value, refs),)
             continue
-        seen.add(key)
-        unique.append({**row, "id": "i" + str(len(unique))})
-    if not unique:
-        return None
 
-    proposal = choose(
-        task=contract.task, clause=clause.to_dict(), inputs=inputs,
-        expected_type=requirement,
-        candidates=[{"id": row["id"], "value": row["value"]}
-                    for row in unique]) or {}
-    ids, compose = proposal.get("candidate_ids"), proposal.get("compose")
-    if not isinstance(ids, list) or not ids or compose not in {"scalar", "list"}:
-        return None
-    by_id = {row["id"]: row for row in unique}
-    if (len(set(map(str, ids))) != len(ids) or
-            any(item not in by_id for item in ids) or
-            (compose == "scalar" and len(ids) != 1)):
-        return None
-    selected = [by_id[item] for item in ids]
-    value = selected[0]["value"] if compose == "scalar" else [
-        row["value"] for row in selected]
-    if not operator_value_matches(requirement, value):
-        return None
-    refs = tuple(dict.fromkeys(str(row["ref"]) for row in selected))
-    binding = state.bind(Binding(
-        clause.id, "supporting-derive", value, refs))
-    state.supporting_clauses.append(
-        SupportingClause("derive", clause.output_ref, refs).to_dict())
-    return binding
+        if (compose == "list") != isinstance(goal.proposed, (list, tuple)):
+            continue
+        if (compose == "object") != isinstance(goal.proposed, dict):
+            continue
+        refs = project_value(goal.proposed, candidates)
+        key = (goal.clause_id, goal.argument)
+        if refs:
+            placements[goal.target_ref] = (
+                Resolved(goal.proposed, refs),)
+            (delegated if goal.mode == "delegated" else direct_exact)[key] = refs
+        elif goal.allow_semantic:
+            evidence_refs = tuple(dict.fromkeys(
+                ref.split("@", 1)[0] for item in candidates
+                for ref in (item.get("refs") or (item["ref"],))))
+            if evidence_refs:
+                direct_semantic[key] = (SEMANTIC_REF, *evidence_refs)
 
-
-def materialize_delegated_support(
-        state: RuntimeState, contract, effect: EffectClause,
-        argument: str, value, *, choose=None) -> tuple[str, ...]:
-    """Prove one locally delegated argument from its declared Receipt scope.
-
-    The Contract already fixes the Root Effect and the delegated argument role.
-    The Binding Agent may select exact nodes only from Receipts reachable through
-    that role's upstream Clause inputs.  Code then projects ``value`` from those
-    nodes.  No persistent Clause output is bound, so a quantified role can prove
-    several calls (for example ``general`` and ``random``) independently.
-    """
-    spec = effect.effect_arguments.get(argument)
-    if (not isinstance(spec, dict) or
-            set(spec) != {"from", "delegated"} or
-            spec.get("delegated") is not True or choose is None):
-        return ()
-    raw_sources = spec.get("from")
-    sources = ([raw_sources] if isinstance(raw_sources, str)
-               else list(raw_sources or ()))
-    clauses = {clause.output_ref: clause for clause in contract.clauses
-               if not isinstance(clause, EffectClause) and clause.output_ref}
-    targets = [source for source in sources
-               if isinstance(clauses.get(source), DeriveClause)]
-    if not targets:
-        return ()
-
-    # Delegation scope is inherited from the target Derive's already-bound
-    # Clause inputs, never from all Receipts visible in the episode.
-    allowed_roots = set()
-    for target_ref in targets:
-        target = clauses[target_ref]
-        for input_ref in target.input_refs:
-            for ref in _binding_refs(state, input_ref):
-                if ref not in {QUERY_REF} and "#" in ref:
-                    allowed_roots.add(ref.split("#", 1)[0] + "#")
-    if not allowed_roots:
-        return ()
-    nodes = [row for row in _nodes(state)
-             if any(str(row["ref"]).startswith(root)
-                    for root in allowed_roots)]
-    if not nodes:
-        return ()
-
-    proposal = choose(
-        task=contract.task, action=effect.action, argument=argument, value=value,
-        delegated=True,
-        targets=[{"ref": target, "clause": clauses[target].to_dict()}
-                 for target in targets],
-        candidates=[{"id": row["id"], "value": row["value"],
-                     "capability": row.get("capability", ""),
-                     "arguments": row.get("arguments", {})}
-                    for row in nodes]) or {}
-    target_ref, ids = proposal.get("target_ref"), proposal.get("candidate_ids")
-    if target_ref not in targets or not isinstance(ids, list) or not ids:
-        return ()
-    by_id = {row["id"]: row for row in nodes}
-    if (len(set(map(str, ids))) != len(ids) or
-            any(item not in by_id for item in ids)):
-        return ()
-    refs = _project_value(value, [by_id[item] for item in ids])
-    if not refs:
-        return ()
-    state.supporting_clauses.append(
-        SupportingClause("delegated", target_ref, refs).to_dict())
-    return refs
-
-
-def materialize_guard(state: RuntimeState, contract,
-                      clause: ConditionalClause, candidate, *,
-                      choose=None, equal=None) -> Binding | None:
-    """Materialize a gt/lt guard from task threshold and exact Receipt score.
-
-    Semantics are recursive guarded selection: [candidate, score, threshold].
-    The Agent selects only exact numeric witnesses; code owns their provenance,
-    executes the comparison, and binds the candidate only when it succeeds.
-    """
-    if clause.operator not in {"gt", "lt"} or choose is None:
-        return None
-    candidate_ref, score_ref, threshold_ref = clause.operand_refs
-    clauses = {item.output_ref: item for item in contract.clauses
-               if not isinstance(item, EffectClause) and item.output_ref}
-    equal = equal or (lambda left, right: left == right)
-
-    # The candidate is either already proven by an earlier guard, or is a
-    # trusted task literal exposed by a task-only Derive role.
-    current_candidate = state.output(candidate_ref)
-    candidate_refs = ()
-    if current_candidate is not UNRESOLVED:
-        if not equal(current_candidate, candidate):
-            return None
-        candidate_refs = _binding_refs(state, candidate_ref)
-    else:
-        source = clauses.get(candidate_ref)
-        if isinstance(source, ConditionalClause) and source.operator in {"gt", "lt"}:
-            bound = materialize_guard(
-                state, contract, source, candidate, choose=choose, equal=equal)
-            if bound is None:
-                return None
-            candidate_refs = bound.refs
-        elif (isinstance(source, DeriveClause) and
-              set(source.input_refs).issubset({"task", "runtime-context"}) and
-              isinstance(candidate, str) and candidate in contract.task):
-            candidate_refs = (QUERY_REF,)
-        else:
-            return None
-
-    receipt_numbers = []
-    for receipt in state.receipts:
-        receipt_numbers.extend(_numeric_candidates(
-            receipt.value, receipt.digest + "#", "r"))
-    # Reassign ids after concatenating multiple Receipts.
-    receipt_numbers = [{**row, "id": "r" + str(index)}
-                       for index, row in enumerate(receipt_numbers)]
-    task_numbers = _numeric_candidates(contract.task, QUERY_REF, "q")
-
-    def role_pool(ref, task_pool, receipt_pool):
-        value = state.output(ref)
-        if value is not UNRESOLVED:
-            return value, _binding_refs(state, ref), []
-        role = clauses.get(ref)
-        if (isinstance(role, DeriveClause) and
-                set(role.input_refs).issubset({"task", "runtime-context"})):
-            return UNRESOLVED, (), task_pool
-        return UNRESOLVED, (), receipt_pool
-
-    score, score_refs, score_pool = role_pool(
-        score_ref, task_numbers, receipt_numbers)
-    threshold, threshold_refs, threshold_pool = role_pool(
-        threshold_ref, task_numbers, receipt_numbers)
-    if ((score is UNRESOLVED and not score_pool) or
-            (threshold is UNRESOLVED and not threshold_pool)):
-        return None
-
-    proposal = choose(
-        task=contract.task, candidate=candidate,
-        operator=clause.operator,
-        score_role=(clauses.get(score_ref).to_dict()
-                    if score_ref in clauses else {"ref": score_ref}),
-        threshold_role=(clauses.get(threshold_ref).to_dict()
-                        if threshold_ref in clauses else {"ref": threshold_ref}),
-        score_candidates=[{"id": row["id"], "value": row["value"]}
-                          for row in score_pool],
-        threshold_candidates=[{"id": row["id"], "value": row["value"]}
-                              for row in threshold_pool]) or {}
-
-    def selected(value, refs, pool, field):
-        if value is not UNRESOLVED:
-            return value, refs
-        by_id = {row["id"]: row for row in pool}
-        row = by_id.get(proposal.get(field))
-        return ((row["value"], (row["ref"],))
-                if row is not None else (UNRESOLVED, ()))
-
-    score, score_refs = selected(
-        score, score_refs, score_pool, "score_candidate_id")
-    threshold, threshold_refs = selected(
-        threshold, threshold_refs, threshold_pool, "threshold_candidate_id")
-    if score is UNRESOLVED or threshold is UNRESOLVED:
-        return None
-    try:
-        result = replay_operator(clause.operator, [candidate, score, threshold])
-    except (TypeError, ValueError):
-        return None
-    if result is UNRESOLVED:
-        return None
-
-    refs = tuple(dict.fromkeys(
-        (*candidate_refs, *score_refs, *threshold_refs)))
-    binding = state.bind(Binding(
-        clause.id, "supporting-conditional", candidate, refs))
-    state.supporting_clauses.append(
-        SupportingClause("conditional", clause.output_ref, refs,
-                         clause.operator).to_dict())
-    return binding
-
-def materialize_support(state: RuntimeState, contract, effect: EffectClause,
-                        argument: str, value, *, choose=None, equal=None,
-                        allow_semantic: bool = False
-                        ) -> Binding | None:
-    """Bind one existing unresolved role through one validated supporting path."""
-    spec = effect.effect_arguments.get(argument)
-    if not isinstance(spec, dict) or set(spec) != {"from"} or choose is None:
-        return None
-    sources = spec["from"]
-    sources = [sources] if isinstance(sources, str) else list(sources or ())
-    unresolved = [source for source in sources
-                  if state.output(source) is UNRESOLVED]
-    if not unresolved:
-        return None
-    clauses = {clause.output_ref: clause for clause in contract.clauses
-               if not isinstance(clause, EffectClause) and clause.output_ref}
-    targets = [source for source in unresolved if source in clauses]
-    if not targets:
-        return None
-
-    nodes = _nodes(state)
-    if not nodes:
-        return None
-    proposal = choose(
-        task=contract.task, action=effect.action, argument=argument, value=value,
-        targets=[{"ref": target, "clause": clauses[target].to_dict()}
-                 for target in targets],
-        candidates=[{"id": row["id"], "value": row["value"],
-                     "capability": row.get("capability", ""),
-                     "arguments": row.get("arguments", {})}
-                    for row in nodes]) or {}
-    target_ref = proposal.get("target_ref")
-    ids = proposal.get("candidate_ids")
-    if target_ref not in targets or not isinstance(ids, list) or not ids:
-        return None
-    by_id = {row["id"]: row for row in nodes}
-    if len(set(map(str, ids))) != len(ids) or any(item not in by_id for item in ids):
-        return None
-    selected = [by_id[item] for item in ids]
-    target = clauses[target_ref]
-    kind, operator, derived = "", "", None
-
-    if isinstance(target, AcquireClause):
-        roots = [row for row in selected if "capability" in row]
-        if (len(roots) != 1 or
-                roots[0].get("capability") != target.capability or
-                not literal_arguments_compatible(
-                    target, roots[0].get("arguments") or {})):
-            return None
-        kind, derived = "acquire", roots[0]["value"]
-    elif isinstance(target, ConditionalClause):
-        operator = target.operator
-        try:
-            derived = replay_operator(
-                operator, [row["value"] for row in selected])
-        except (IndexError, TypeError, ValueError):
-            return None
-        kind = "conditional"
-    elif isinstance(target, DeriveClause):
-        if not allow_semantic:
-            return None
-        # Selection is the bounded semantic judgment: values and provenance
-        # remain code-owned and the Agent cannot invent either.
-        kind, derived = "derive", value
-    else:
-        return None
-
-    equal = equal or (lambda left, right: left == right)
-    if not equal(derived, value):
-        return None
-    if kind == "derive":
-        # Derive supporting is a provenance projection, not a semantic
-        # authority mint. This single rule covers URLs, email, IBAN, amounts,
-        # identifiers and structured compositions without category whitelists.
-        refs = _project_value(value, selected)
-        if not refs:
-            return None
-    else:
-        refs = tuple(dict.fromkeys(row["ref"] for row in selected))
-    clause = SupportingClause(kind, target_ref, refs, operator)
-    binding = state.bind(Binding(
-        target_ref.partition(".")[0], "supporting-" + kind, value, refs))
-    state.supporting_clauses.append(clause.to_dict())
-    return binding
+    resolver = LazyResolver(state, contract, placements)
+    exact = dict(immediate)
+    effects = [clause for clause in contract.clauses
+               if isinstance(clause, EffectClause) and clause.action == action]
+    for effect in effects:
+        for name, spec in effect.effect_arguments.items():
+            if name not in arguments or not isinstance(spec, dict) or "from" not in spec:
+                continue
+            raw = spec["from"]
+            sources = [raw] if isinstance(raw, str) else list(raw or ())
+            matches = [row for source in sources for row in resolver.values(source)
+                       if equal(name, row.value, arguments[name])]
+            if matches:
+                refs = tuple(dict.fromkeys(
+                    ref for row in matches for ref in row.refs))
+                target = (delegated if spec.get("delegated") is True else exact)
+                target[(effect.id, name)] = refs
+    exact.update(direct_exact)
+    semantic = {**exact, **direct_semantic}
+    return semantic, delegated, placements

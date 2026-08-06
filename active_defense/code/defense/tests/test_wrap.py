@@ -63,14 +63,14 @@ class TraceTests(unittest.TestCase):
                               ("c0.records", "c1.scores"), "chosen"),
             EffectClause("", "send", "send", {"body": {"from": "c2.chosen"}}),
         ])
-        state = RuntimeState()
-        r0 = state.record(Receipt("list_records", {}, ["a", "b"]))
-        r1 = state.record(Receipt("score", {}, [1, 9]))
-        bind_acquire(state, contract, r0)
-        bind_acquire(state, contract, r1)
-        resolve_conditional(state, contract.clauses[2])
-        v = check_effect(state, contract, "send", {"body": "b"})
-        self.assertTrue(v.ok)
+        from code.defense.engine import Episode
+        episode = Episode(
+            contract, "n", approval_enabled=False,
+            continuation_enabled=False)
+        r0 = episode.record_receipt("list_records", {}, ["a", "b"])
+        r1 = episode.record_receipt("score", {}, [1, 9])
+        v = episode.effect("send", {"body": "b"})
+        self.assertEqual("pass", v.route)
         # exact provenance: the two acquired receipts, never a whole-receipt blob
         self.assertEqual({r0.digest + "#", r1.digest + "#"}, set(v.refs))
 

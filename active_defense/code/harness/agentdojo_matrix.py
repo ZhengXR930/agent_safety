@@ -60,7 +60,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--manifest-root", default=
-                        "results/agentdojo_v29_full_20260722/manifests")
+                        "code/manifest/agentdojo")
     parser.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
     root = Path(args.output_root)
