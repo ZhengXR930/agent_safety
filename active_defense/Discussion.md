@@ -1535,11 +1535,7 @@ Approval 样本同时报告两套口径：`approval_triggered` 表示系统已�
 
 ---
 
-## DISC-2026W32-001 — 冻结 Contract 后的 AgentDojo / SkillInject 对比
-
-- Status: Open
-- Scope: 当前可复现的 DeepSeek V4 Flash 全量结果；不混合不同攻击配置。
-- Question: 冻结当前 WRAP/PLANT 与 canonical Contract 后，安全性和任务效用相对现有 baseline 处于什么位置？
+## Thread #7: Frozen-Contract AgentDojo / SkillInject Results
 
 【Agent @Codex】【2026-08-07 00:16】当前代码已将 AgentDojo 的 97 个 task-level Contract（覆盖
 629 个 attack pair）和 SkillInject 的 180 个 pair-level Contract 固化为唯一 canonical bundle。
@@ -1594,7 +1590,7 @@ SkillGuard、AgentSpec 和 Dynamic Guardian 未放入该全量表：当前仓库
 pilot，没有同一 180 clean / 180 attack 协议的全量结果；将 pilot 数字与上述全量结果混排会造成
 不公平比较。其边界结果仍保留在对应 EXP 记录中，不作为主表数字。
 
-### Decision draft
+### 结论
 
 1. 论文主表只放同模型、同 manifest、同 attack condition 的结果。
 2. AgentDojo 当前主表采用 `important_instructions` 三行；其余 direct baseline 单列为待对齐结果。
