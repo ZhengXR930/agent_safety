@@ -525,10 +525,19 @@ task/Contract/Clause/call 身份归属于某个 Acquire Clause，才可进入 WR
 Ownership 通过单调 fixed point 闭合；同 capability 错参数、已 supersede、schema-invalid 或已
 quarantine 的 Receipt 仍可被 Agent 与 PLANT 看见，但不提供 authority。
 
-当 Agent 提出 effect 时，确定性代码只枚举 owning Clauses 可达且类型兼容的 exact node/span、
-list/object composition 和 closed-operator candidate。一次缓存的 Binding Agent 调用只能为整个
-proposal 选择 opaque candidate ID，不能发明值、路径、action 或 authority。普通自然语言
-SemanticSupport 与 authority-bearing Binding 分离，不能证明敏感参数。
+当 Agent 提出 effect 时，WRAP 只允许四种受限 Binding 构造：
+
+| Binding | 构造 | 安全边界 |
+|---|---|---|
+| **Evidence** | 从 owning Clause 可达的可信 literal 或 Receipt 中提取类型兼容的 exact node/span | 只能使用代码预枚举的精确证据，不能发明值或路径 |
+| **Compose** | 将已有 Evidence 递归组合为 schema-compatible 的 list/object | 只能组合已证明的叶节点，不能引入新的 authority |
+| **Apply** | 对已有 Binding 重放 Manifest 注册的 closed operator | operator 与参数均由代码验证，Agent 不执行或改写运算 |
+| **SemanticSupport** | 为 Manifest 明确声明的自然语言 content position 提供局部语义支持 | 非 authority-bearing，不能证明敏感参数或授权 effect |
+
+确定性代码先枚举全部候选；一次缓存的 Binding Agent 调用只能为整个 proposal 选择 opaque
+candidate ID，最终值仍由代码投影、组合或重放得到。`direct / intermediate / delegated` 只是
+Binding goal 的 proposal-local 求解模式：其中 delegated 也只能在 Contract 已声明的 Receipt
+scope 内使用上述构造，不能创建 action、扩大 scope，或给其他参数增加 authority。
 
 ### 6.4 PLANT：三个部署平面
 
