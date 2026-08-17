@@ -3,7 +3,7 @@
 ## DISC-2026W33-003 · Thread #9: DeepSeek Target + DeepSeek Defense Benchmark Comparison
 
 Status: Open  
-Updated: 2026-08-16  
+Updated: 2026-08-17  
 
 ### AgentDojo
 
@@ -48,16 +48,16 @@ Updated: 2026-08-16
 | Schema | BU | AU | ASR |
 |---|---:|---:|---:|
 | CapFlow · Ours | 127/150 (84.7%) | **149/150 (99.3%)** | **0/150 (0.0%)** |
-| CapFlow · Undefended | — | — | — |
+| CapFlow · Undefended | 120/150 (80.0%) | 93/150 (62.0%) | 90/150 (60.0%) |
 | CapFlow · ClawGuard | 0/150 (0.0%) | 131/150 (87.3%) | **0/150 (0.0%)** |
 | CapFlow · Progent | **144/150 (96.0%)** | 56/150 (37.3%) | 92/150 (61.3%) |
 | CapFlow · TaskShield | 118/150 (78.7%) | 75/150 (50.0%) | 63/150 (42.0%) |
 | AuthBlur · Ours | 115/116 (99.1%) | **116/116 (100.0%)** | **0/116 (0.0%)** |
-| AuthBlur · Undefended | — | — | — |
+| AuthBlur · Undefended | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
 | AuthBlur · TaskShield | **116/116 (100.0%)** | 115/116 (99.1%) | 82/116 (70.7%) |
 | AuthBlur · DynamicGuardian | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
-| TrustLift · Ours | — | **401/401 (100.0%)** | **0/401 (0.0%)** |
-| TrustLift · Undefended | — | — | — |
+| TrustLift · Ours | **401/401 (100.0%)** | **401/401 (100.0%)** | **0/401 (0.0%)** |
+| TrustLift · Undefended | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · ClawGuard | 26/401 (6.5%) | 26/401 (6.5%) | 26/401 (6.5%) |
 | TrustLift · Progent | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · TaskShield | 325/401 (81.0%) | 315/401 (78.6%) | 315/401 (78.6%) |
