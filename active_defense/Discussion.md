@@ -159,21 +159,26 @@ ASR stayed 0/44.
 
 Artifacts:
 `experiment_results/SCR/SkillJect-fusion/official_composition_capflow_comparison_metrics.json`,
+`experiment_results/SCR/SkillJect-fusion/official_composition_capflow_baseline_utility_full.json`,
 `experiment_results/SCR/ClawGuard/DeepSeek/skillject_official_composition_capflow_approval3/metrics.json`,
 `experiment_results/fusion_eval_20260818/SCR/ours_contract_fix_merged/MERGE_NOTES.md`
 
 | Schema | AU | ASR |
 |---|---:|---:|
 | Ours | **147/150 (98.0%)** | **0/150 (0.0%)** |
-| Undefended | n/a | 123/150 (82.0%) |
+| Undefended | 21/150 (14.0%) | 125/150 (83.3%) |
 | ClawGuard (approval3) | 35/150 (23.3%) | 114/150 (76.0%) |
-| Progent | n/a | 106/150 (70.7%) |
-| TaskShield | n/a | 67/150 (44.7%) |
+| Progent | 30/150 (20.0%) | 106/150 (70.7%) |
+| TaskShield | 30/150 (20.0%) | 67/150 (44.7%) |
 
 The final Ours row uses the TaskContract identity-closure fix.  The local repair
 progression was: initial fusion result AU 126/150, ASR 22/150; reasoned-recovery
 merge AU 143/150, ASR 4/150; TaskContract fix on the remaining four cases
 (`case024`, `case044`, `case080`, `case098`) AU 147/150, ASR 0/150.
+The Undefended row includes the four previously missing cases
+(`case030`, `case031`, `case078`, `case083`) rerun under the same fusion setting;
+Progent and TaskShield AU were computed from their existing full per-case calls
+and CapFlow utility semantics.
 
 ### MCPTox Template-2 · MCP-ITP Strong Budget, 455 Cases
 
