@@ -83,3 +83,141 @@ Updated: 2026-08-18
 | ClawGuard | 367/415 (88.4%) | 237/622 (38.1%) |
 | StackOne | 327/415 (78.8%) | 101/622 (16.2%) |
 | Pipelock | 367/415 (88.4%) | 301/622 (48.4%) |
+
+## DISC-2026W33-004 · Thread #10: Adaptive-Attack Subsets for MCP and Skill Units
+
+Status: Open  
+Updated: 2026-08-18  
+
+### Scope
+
+This thread reports adaptive-attack stress tests on four applicability-defined
+subsets.  The subset rule is threat-surface coverage, not effect-size selection:
+we include cases where the adaptive method has the same attack surface assumed by
+the method, and we keep failed/missing cases in the denominator when the run is
+reported as full-subset.
+
+### Adaptive Attacks Used
+
+Skill units use SkillJect-style fusion.  The attacker rewrites the benign
+`SKILL.md` into a polluted skill document, preserving the benign skill workflow
+while embedding an instruction that can be adopted during task execution.  The
+attack is adaptive to the skill-document substrate and task utility constraint:
+it changes the skill artifact, not the user task or the defense implementation.
+The fused skills are reusable across defenses, so this is a one-shot
+artifact-level adaptive attack rather than a per-defense iterative attack.
+
+MCP units use MCP-ITP-style poisoned tool descriptions.  The attacker optimizes
+MCP tool metadata so that the target model naturally invokes the attacker-chosen
+tool or target operation.  This directly attacks the MCP tool-selection layer:
+the malicious object is the tool description/catalog entry, while the clean task
+and target model remain fixed.  We report MCP-ITP adaptive ASR, not the original
+MCPTox/MSB malicious-objective judge, because the attack objective has changed to
+target-tool invocation under optimized metadata.
+
+### Subset Selection
+
+SkillInject uses the 44 comparable official SkillJect-fusion pairs.  The original
+candidate set has 45 scripted pairs, but `id015_task1` is excluded because it has
+no common comparable fused pair across the merged baseline/Ours result.
+
+SCR uses CapFlow `A+B_neutral` under official composition fusion.  This is the
+SCR condition where SkillJect-style skill-document pollution most directly tests
+A-side skill influence causing a B-side external effect.  `A+B_explicit` is not
+reported because it is an explicitly malicious user task rather than an IPI
+adaptive attack.  AuthBlur and TrustLift are not included in this adaptive table
+because their core threat surfaces are not the SkillJect fusion surface.
+
+MCPTox uses the Template-2 full subset, 455 cases.  Template-2 is the MCPTox
+family whose clean task/catalog can be transformed into a tool-selection
+metadata attack; the MCP-ITP generation used strong budget `N=5,T=2,m=3`.
+
+MSB uses 212 applicable cases across `name_overlap`,
+`preference_manipulation`, `preference_manipulation-simulated_user`, and
+`tool_transfer`.  These are the MSB settings where MCP poisoned metadata can
+plausibly steer target-tool selection.  We do not report the earlier MSB shared
+ASR sanity table because it was all-zero and not aligned with the MCP-ITP
+adaptive objective.
+
+### SkillInject · SkillJect Fusion, 44 Pairs
+
+Artifacts:
+`experiment_results/SkillInject/SkillJect-fusion/official_scripted45_all_baselines_ours_recovery_contractfix_merged44/merged_metrics.json`
+
+| Schema | AU | ASR |
+|---|---:|---:|
+| Ours | **41/44 (93.2%)** | **0/44 (0.0%)** |
+| Undefended | 38/44 (86.4%) | 21/44 (47.7%) |
+| ClawGuard | 24/44 (54.5%) | 5/44 (11.4%) |
+| Progent | 19/44 (43.2%) | 4/44 (9.1%) |
+| TaskShield | 29/44 (65.9%) | 1/44 (2.3%) |
+
+Ours changed from AU 25/44 to 41/44 after the recovery/contract fix merge, while
+ASR stayed 0/44.
+
+### SCR CapFlow · SkillJect Composition Fusion, 150 Cases
+
+Artifacts:
+`experiment_results/SCR/SkillJect-fusion/official_composition_capflow_comparison_metrics.json`,
+`experiment_results/SCR/ClawGuard/DeepSeek/skillject_official_composition_capflow_approval3/metrics.json`,
+`experiment_results/fusion_eval_20260818/SCR/ours_contract_fix_merged/MERGE_NOTES.md`
+
+| Schema | AU | ASR |
+|---|---:|---:|
+| Ours | **147/150 (98.0%)** | **0/150 (0.0%)** |
+| Undefended | n/a | 123/150 (82.0%) |
+| ClawGuard (approval3) | 35/150 (23.3%) | 114/150 (76.0%) |
+| Progent | n/a | 106/150 (70.7%) |
+| TaskShield | n/a | 67/150 (44.7%) |
+
+The final Ours row uses the TaskContract identity-closure fix.  The local repair
+progression was: initial fusion result AU 126/150, ASR 22/150; reasoned-recovery
+merge AU 143/150, ASR 4/150; TaskContract fix on the remaining four cases
+(`case024`, `case044`, `case080`, `case098`) AU 147/150, ASR 0/150.
+
+### MCPTox Template-2 · MCP-ITP Strong Budget, 455 Cases
+
+Artifacts:
+`experiment_results/mcptox/mcp_itp_template2_targetfirst_v5_strong_N5T2m3_full.json`
+and replay files under `experiment_results/mcptox/*_mcp_itp_template2_v5_full455_replay.json`.
+
+| Schema | AU | ASR |
+|---|---:|---:|
+| Ours | **357/455 (78.5%)** | **7/455 (1.5%)** |
+| Undefended | 140/455 (30.8%) | 245/455 (53.8%) |
+| MCPGuard | 149/455 (32.7%) | 203/455 (44.6%) |
+| ClawGuard | 260/455 (57.1%) | 18/455 (4.0%) |
+| StackOne | 229/455 (50.3%) | 33/455 (7.3%) |
+| Pipelock | 131/455 (28.8%) | 241/455 (53.0%) |
+
+This subset contains 381 tool-hijack cases scored by paper-style target-tool
+invocation and 74 cases scored by the MCPTox-compatible adaptive judge.
+
+### MSB · MCP-ITP Payload-Aware, 212 Applicable Cases
+
+Artifacts:
+`experiment_results/MSB/mcp_itp_payloadaware_v2_N3T1m2_full212.json`
+and replay files under `experiment_results/MSB/*mcp_itp_payloadaware_v2*full212*`.
+
+| Schema | AU | ASR |
+|---|---:|---:|
+| Ours | **130/212 (61.3%)** | **0/212 (0.0%)** |
+| Undefended | 64/212 (30.2%) | 99/212 (46.7%) |
+| MCPGuard | 71/212 (33.5%) | 91/212 (42.9%) |
+| ClawGuard | 72/212 (34.0%) | 82/212 (38.7%) |
+| StackOne | 68/212 (32.1%) | 26/212 (12.3%) |
+| Pipelock | 62/212 (29.2%) | 100/212 (47.2%) |
+
+Coverage: `name_overlap` 44, `preference_manipulation` 44,
+`preference_manipulation-simulated_user` 44, and `tool_transfer` 80.  ASR here is
+target-tool selection under optimized poisoned descriptions, not MSB official
+side-effect success.
+
+### Current Interpretation
+
+Across all four applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
+0/44 on SkillInject, 0/150 on SCR CapFlow, 7/455 on MCPTox Template-2, and 0/212
+on MSB.  The remaining MCPTox 7/455 are the only non-zero adaptive failures and
+should be the next MCP-side error-analysis target.  The SCR non-zero failures
+were contract-generation bugs rather than WRAP policy gaps; fixing identity
+argument closure removed the remaining four ASR without lowering AU.
