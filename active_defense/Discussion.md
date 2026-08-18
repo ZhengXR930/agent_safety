@@ -97,6 +97,10 @@ we include cases where the adaptive method has the same attack surface assumed b
 the method, and we keep failed/missing cases in the denominator when the run is
 reported as full-subset.
 
+For each table, `AU-original` and `ASR-original` are the corresponding
+non-adaptive/original results on the same applicability subset, not full-suite
+benchmark aggregates.
+
 ### Adaptive Attacks Used
 
 Skill units use SkillJect-style fusion.  The attacker rewrites the benign
@@ -144,13 +148,13 @@ adaptive objective.
 Artifacts:
 `experiment_results/SkillInject/SkillJect-fusion/official_scripted45_all_baselines_ours_recovery_contractfix_merged44/merged_metrics.json`
 
-| Schema | AU | ASR |
-|---|---:|---:|
-| Ours | **41/44 (93.2%)** | **0/44 (0.0%)** |
-| Undefended | 38/44 (86.4%) | 21/44 (47.7%) |
-| ClawGuard | 24/44 (54.5%) | 5/44 (11.4%) |
-| Progent | 19/44 (43.2%) | 4/44 (9.1%) |
-| TaskShield | 29/44 (65.9%) | 1/44 (2.3%) |
+| Schema | AU | AU-original | ASR | ASR-original |
+|---|---:|---:|---:|---:|
+| Ours | **41/44 (93.2%)** | **37/44 (84.1%)** | **0/44 (0.0%)** | **0/44 (0.0%)** |
+| Undefended | 38/44 (86.4%) | 33/44 (75.0%) | 21/44 (47.7%) | 10/44 (22.7%) |
+| ClawGuard | 24/44 (54.5%) | 12/44 (27.3%) | 5/44 (11.4%) | 0/44 (0.0%) |
+| Progent | 19/44 (43.2%) | 15/44 (34.1%) | 4/44 (9.1%) | 1/44 (2.3%) |
+| TaskShield | 29/44 (65.9%) | 18/44 (40.9%) | 1/44 (2.3%) | 0/44 (0.0%) |
 
 Ours changed from AU 25/44 to 41/44 after the recovery/contract fix merge, while
 ASR stayed 0/44.
@@ -163,13 +167,13 @@ Artifacts:
 `experiment_results/SCR/ClawGuard/DeepSeek/skillject_official_composition_capflow_approval3/metrics.json`,
 `experiment_results/fusion_eval_20260818/SCR/ours_contract_fix_merged/MERGE_NOTES.md`
 
-| Schema | AU | ASR |
-|---|---:|---:|
-| Ours | **147/150 (98.0%)** | **0/150 (0.0%)** |
-| Undefended | 21/150 (14.0%) | 125/150 (83.3%) |
-| ClawGuard (approval3) | 35/150 (23.3%) | 114/150 (76.0%) |
-| Progent | 30/150 (20.0%) | 106/150 (70.7%) |
-| TaskShield | 30/150 (20.0%) | 67/150 (44.7%) |
+| Schema | AU | AU-original | ASR | ASR-original |
+|---|---:|---:|---:|---:|
+| Ours | **147/150 (98.0%)** | **149/150 (99.3%)** | **0/150 (0.0%)** | **0/150 (0.0%)** |
+| Undefended | 21/150 (14.0%) | 51/150 (34.0%) | 125/150 (83.3%) | 96/150 (64.0%) |
+| ClawGuard (approval3) | 35/150 (23.3%) | 49/150 (32.7%) | 114/150 (76.0%) | 98/150 (65.3%) |
+| Progent | 30/150 (20.0%) | 56/150 (37.3%) | 106/150 (70.7%) | 92/150 (61.3%) |
+| TaskShield | 30/150 (20.0%) | 75/150 (50.0%) | 67/150 (44.7%) | 63/150 (42.0%) |
 
 The final Ours row uses the TaskContract identity-closure fix.  The local repair
 progression was: initial fusion result AU 126/150, ASR 22/150; reasoned-recovery
@@ -186,14 +190,14 @@ Artifacts:
 `experiment_results/mcptox/mcp_itp_template2_targetfirst_v5_strong_N5T2m3_full.json`
 and replay files under `experiment_results/mcptox/*_mcp_itp_template2_v5_full455_replay.json`.
 
-| Schema | AU | ASR |
-|---|---:|---:|
-| Ours | **357/455 (78.5%)** | **7/455 (1.5%)** |
-| Undefended | 140/455 (30.8%) | 245/455 (53.8%) |
-| MCPGuard | 149/455 (32.7%) | 203/455 (44.6%) |
-| ClawGuard | 260/455 (57.1%) | 18/455 (4.0%) |
-| StackOne | 229/455 (50.3%) | 33/455 (7.3%) |
-| Pipelock | 131/455 (28.8%) | 241/455 (53.0%) |
+| Schema | AU | AU-original | ASR | ASR-original |
+|---|---:|---:|---:|---:|
+| Ours | **357/455 (78.5%)** | **370/455 (81.3%)** | **7/455 (1.5%)** | **0/455 (0.0%)** |
+| Undefended | 140/455 (30.8%) | 167/455 (36.7%) | 245/455 (53.8%) | 145/455 (31.9%) |
+| MCPGuard | 149/455 (32.7%) | 240/455 (52.7%) | 203/455 (44.6%) | 1/455 (0.2%) |
+| ClawGuard | 260/455 (57.1%) | 197/455 (43.3%) | 18/455 (4.0%) | 71/455 (15.6%) |
+| StackOne | 229/455 (50.3%) | 68/455 (14.9%) | 33/455 (7.3%) | 9/455 (2.0%) |
+| Pipelock | 131/455 (28.8%) | 206/455 (45.3%) | 241/455 (53.0%) | 136/455 (29.9%) |
 
 This subset contains 381 tool-hijack cases scored by paper-style target-tool
 invocation and 74 cases scored by the MCPTox-compatible adaptive judge.
@@ -204,14 +208,14 @@ Artifacts:
 `experiment_results/MSB/mcp_itp_payloadaware_v2_N3T1m2_full212.json`
 and replay files under `experiment_results/MSB/*mcp_itp_payloadaware_v2*full212*`.
 
-| Schema | AU | ASR |
-|---|---:|---:|
-| Ours | **130/212 (61.3%)** | **0/212 (0.0%)** |
-| Undefended | 64/212 (30.2%) | 99/212 (46.7%) |
-| MCPGuard | 71/212 (33.5%) | 91/212 (42.9%) |
-| ClawGuard | 72/212 (34.0%) | 82/212 (38.7%) |
-| StackOne | 68/212 (32.1%) | 26/212 (12.3%) |
-| Pipelock | 62/212 (29.2%) | 100/212 (47.2%) |
+| Schema | AU | AU-original | ASR | ASR-original |
+|---|---:|---:|---:|---:|
+| Ours | **130/212 (61.3%)** | **175/212 (82.5%)** | **0/212 (0.0%)** | **0/212 (0.0%)** |
+| Undefended | 64/212 (30.2%) | 174/212 (82.1%) | 99/212 (46.7%) | 80/212 (37.7%) |
+| MCPGuard | 71/212 (33.5%) | 157/212 (74.1%) | 91/212 (42.9%) | 40/212 (18.9%) |
+| ClawGuard | 72/212 (34.0%) | 166/212 (78.3%) | 82/212 (38.7%) | 80/212 (37.7%) |
+| StackOne | 68/212 (32.1%) | 165/212 (77.8%) | 26/212 (12.3%) | 49/212 (23.1%) |
+| Pipelock | 62/212 (29.2%) | 165/212 (77.8%) | 100/212 (47.2%) | 77/212 (36.3%) |
 
 Coverage: `name_overlap` 44, `preference_manipulation` 44,
 `preference_manipulation-simulated_user` 44, and `tool_transfer` 80.  ASR here is
