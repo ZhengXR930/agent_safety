@@ -84,14 +84,14 @@ Updated: 2026-08-18
 | StackOne | 327/415 (78.8%) | 101/622 (16.2%) |
 | Pipelock | 367/415 (88.4%) | 301/622 (48.4%) |
 
-## DISC-2026W33-004 · Thread #10: Adaptive-Attack Subsets for MCP and Skill Units
+## DISC-2026W33-004 · Thread #10: Adaptive-Attack Subsets for Tool, MCP, and Skill Units
 
 Status: Open  
-Updated: 2026-08-18  
+Updated: 2026-08-19  
 
 ### Scope
 
-This thread reports adaptive-attack stress tests on four applicability-defined
+This thread reports adaptive-attack stress tests on five applicability-defined
 subsets.  The subset rule is threat-surface coverage, not effect-size selection:
 we include cases where the adaptive method has the same attack surface assumed by
 the method, and we keep failed/missing cases in the denominator when the run is
@@ -102,6 +102,12 @@ non-adaptive/original results on the same applicability subset, not full-suite
 benchmark aggregates.
 
 ### Adaptive Attacks Used
+
+Tool units use AutoDojo-style iterative payload optimization.  The attacker model
+generates and refines the indirect instruction from target-model feedback, while
+the clean task, tool set, and target model remain fixed.  For ASB-OPI we use a
+GPT-5.4 attack model against a DeepSeek target with `T=4`; the generated cache is
+then replayed unchanged against Ours and the selected baselines.
 
 Skill units use SkillJect-style fusion.  The attacker rewrites the benign
 `SKILL.md` into a polluted skill document, preserving the benign skill workflow
@@ -120,6 +126,12 @@ MCPTox/MSB malicious-objective judge, because the attack objective has changed t
 target-tool invocation under optimized metadata.
 
 ### Subset Selection
+
+ASB-OPI uses all 400 attacker-tool cells, one representative attack case per
+cell.  This is the natural cell-level unit for AutoDojo-style search because the
+optimized payload is tied to the clean task plus attacker-tool surface.  The
+baseline set is the strongest original ASB-OPI defenses outside Ours/Undefended
+under low-ASR, high-AU selection: MELON, CaMeL, and DRIFT.
 
 SkillInject uses the 44 comparable official SkillJect-fusion pairs.  The original
 candidate set has 45 scripted pairs, but `id015_task1` is excluded because it has
@@ -142,6 +154,30 @@ MSB uses 212 applicable cases across `name_overlap`,
 plausibly steer target-tool selection.  We do not report the earlier MSB shared
 ASR sanity table because it was all-zero and not aligned with the MCP-ITP
 adaptive objective.
+
+### ASB-OPI · AutoDojo-Style T4, 400 Attacker-Tool Cells
+
+Artifacts:
+`experiment_results/ASB-OPI/AutoDojoStyle/GPT5.4_vs_DeepSeek/undefended_T4_full400_reuse191/merged_cache.json`,
+`experiment_results/ASB-OPI/AutoDojoStyle/GPT5.4_vs_DeepSeek/undefended_T4_full400_reuse191/MERGED_METADATA.json`,
+and replay metadata under
+`experiment_results/ASB-OPI/AutoDojoStyle/GPT5.4_vs_DeepSeek/*_T4_full400_reuse191/`.
+
+| Schema | AU | AU-original | ASR | ASR-original |
+|---|---:|---:|---:|---:|
+| Undefended | **388/400 (97.0%)** | 333/400 (83.2%) | 345/400 (86.2%) | 164/400 (41.0%) |
+| Ours | 303/400 (75.8%) | **344/400 (86.0%)** | **0/400 (0.0%)** | **0/400 (0.0%)** |
+| MELON | 335/400 (83.8%) | 332/400 (83.0%) | 45/400 (11.2%) | 50/400 (12.5%) |
+| CaMeL | 284/400 (71.0%) | 304/400 (76.0%) | 46/400 (11.5%) | 43/400 (10.8%) |
+| DRIFT | 147/400 (36.8%) | 160/400 (40.0%) | 34/400 (8.5%) | 35/400 (8.8%) |
+
+The adaptive attack substantially raises Undefended ASR on the same 400 cells
+from 164/400 to 345/400, so this is a valid Tool-unit adaptive stress test.  Ours
+keeps ASR at 0/400.  The AU drop from 344/400 original to 303/400 adaptive is
+mostly a target-agent task-completion failure after seeing poisoned observations:
+the frozen contracts contain the required normal tools, and WRAP is not
+overblocking them, but the target agent sometimes stops before calling all
+remaining normal tools.
 
 ### SkillInject · SkillJect Fusion, 44 Pairs
 
@@ -224,9 +260,12 @@ side-effect success.
 
 ### Current Interpretation
 
-Across all four applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
-0/44 on SkillInject, 0/150 on SCR CapFlow, 7/455 on MCPTox Template-2, and 0/212
-on MSB.  The remaining MCPTox 7/455 are the only non-zero adaptive failures and
-should be the next MCP-side error-analysis target.  The SCR non-zero failures
-were contract-generation bugs rather than WRAP policy gaps; fixing identity
-argument closure removed the remaining four ASR without lowering AU.
+Across all five applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
+0/400 on ASB-OPI, 0/44 on SkillInject, 0/150 on SCR CapFlow, 7/455 on MCPTox
+Template-2, and 0/212 on MSB.  The remaining MCPTox 7/455 are the only non-zero
+adaptive failures and should be the next MCP-side error-analysis target.  The SCR
+non-zero failures were contract-generation bugs rather than WRAP policy gaps;
+fixing identity argument closure removed the remaining four ASR without lowering
+AU.  On ASB-OPI, the remaining gap is AU rather than ASR: the current evidence
+points to payload-induced incomplete normal-tool selection by the target model,
+not missing contract authority or WRAP overblocking.
