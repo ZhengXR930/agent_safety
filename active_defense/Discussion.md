@@ -49,8 +49,8 @@ Updated: 2026-08-18
 |---|---:|---:|---:|
 | CapFlow · Ours | 127/150 (84.7%) | **149/150 (99.3%)** | **0/150 (0.0%)** |
 | CapFlow · Undefended | 120/150 (80.0%) | 93/150 (62.0%) | 90/150 (60.0%) |
-| CapFlow · ClawGuard (approval3) | **150/150 (100.0%)** | 49/150 (32.7%) | 98/150 (65.3%) |
-| CapFlow · Progent | 144/150 (96.0%) | 56/150 (37.3%) | 92/150 (61.3%) |
+| CapFlow · ClawGuard | 0/150 (0.0%) | 131/150 (87.3%) | **0/150 (0.0%)** |
+| CapFlow · Progent | **144/150 (96.0%)** | 56/150 (37.3%) | 92/150 (61.3%) |
 | CapFlow · TaskShield | 118/150 (78.7%) | 75/150 (50.0%) | 63/150 (42.0%) |
 | AuthBlur · Ours | 115/116 (99.1%) | **116/116 (100.0%)** | **0/116 (0.0%)** |
 | AuthBlur · Undefended | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
@@ -58,7 +58,7 @@ Updated: 2026-08-18
 | AuthBlur · DynamicGuardian | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
 | TrustLift · Ours | **401/401 (100.0%)** | **401/401 (100.0%)** | **0/401 (0.0%)** |
 | TrustLift · Undefended | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
-| TrustLift · ClawGuard (approval3) | **401/401 (100.0%)** | 26/401 (6.5%) | 26/401 (6.5%) |
+| TrustLift · ClawGuard | 26/401 (6.5%) | 26/401 (6.5%) | 26/401 (6.5%) |
 | TrustLift · Progent | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · TaskShield | 325/401 (81.0%) | 315/401 (78.6%) | 315/401 (78.6%) |
 
@@ -260,7 +260,7 @@ side-effect success.
 
 ### Current Interpretation
 
-Across the five applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
+Across all five applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
 0/400 on ASB-OPI, 0/44 on SkillInject, 0/150 on SCR CapFlow, 7/455 on MCPTox
 Template-2, and 0/212 on MSB.  The remaining MCPTox 7/455 are the only non-zero
 adaptive failures and should be the next MCP-side error-analysis target.  The SCR
