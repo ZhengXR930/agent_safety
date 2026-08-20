@@ -269,3 +269,54 @@ fixing identity argument closure removed the remaining four ASR without lowering
 AU.  On ASB-OPI, the remaining gap is AU rather than ASR: the current evidence
 points to payload-induced incomplete normal-tool selection by the target model,
 not missing contract authority or WRAP overblocking.
+
+## DISC-2026W34-001 · Thread #11: Original-Benchmark WRAP/PLANT Ablation
+
+Status: Open  
+Updated: 2026-08-20  
+
+### Scope
+
+This thread reports the original-benchmark ablation results for the refactored
+shared defense stack under `deepseek-v4-flash` as both target model and defense
+model.  `full` is the complete Ours configuration; `wrap-only` disables PLANT;
+`plant-only` disables WRAP.  Results are read from
+`experiment_results/ablation_original/DeepSeek_refactor/`.
+
+### Ablation Table
+
+| Benchmark | Mode | BU | AU | ASR |
+|---|---|---:|---:|---:|
+| AgentDojo | full | 84/97 (86.6%) | 505/629 (80.3%) | 0/629 (0.0%) |
+| AgentDojo | wrap-only | N/A | N/A | N/A |
+| AgentDojo | plant-only | 70/77 (90.9%) | 394/455 (86.6%) | 0/455 (0.0%) |
+| ASB-OPI | full | 46/51 (90.2%) | 1735/2040 (85.0%) | 0/2040 (0.0%) |
+| ASB-OPI | wrap-only | 45/51 (88.2%) | 1662/2040 (81.5%) | 0/2040 (0.0%) |
+| ASB-OPI | plant-only | 44/51 (86.3%) | 1168/1678 (69.6%) | 1003/1678 (59.8%) |
+| SkillInject | full | 146/180 (81.1%) | 142/180 (78.9%) | 1/180 (0.6%) |
+| SkillInject | wrap-only | 131/173 (75.7%) | 56/93 (60.2%) | 6/93 (6.5%) |
+| SkillInject | plant-only | 128/179 (71.5%) | 123/179 (68.7%) | 4/179 (2.2%) |
+| SCR | full | 643/667 (96.4%) | 666/667 (99.9%) | 0/667 (0.0%) |
+| SCR | wrap-only | 628/667 (94.2%) | 621/667 (93.1%) | 37/667 (5.5%) |
+| SCR | plant-only | 197/211 (93.4%) | 86/211 (40.8%) | 123/211 (58.3%) |
+| MCPTox | full | 231/357 (64.7%) | 1015/1348 (75.3%) | 0/1348 (0.0%) |
+| MCPTox | wrap-only | 223/357 (62.5%) | 898/1348 (66.6%) | 87/1348 (6.5%) |
+| MCPTox | plant-only | 240/357 (67.2%) | 784/1348 (58.2%) | 56/1348 (4.2%) |
+| MSB | full | 16/17 (94.1%) | 343/415 (82.7%) | 0/622 (0.0%) |
+| MSB | wrap-only | 242/243 (99.6%) | 242/243 (99.6%) | 0/243 (0.0%) |
+| MSB | plant-only | 64/64 (100.0%) | 64/64 (100.0%) | 5/64 (7.8%) |
+
+### Notes
+
+AgentDojo `wrap-only` is not reported because
+`experiment_results/ablation_original/DeepSeek_refactor/AgentDojo/wrap_only/`
+does not contain a complete refactor-run artifact; older non-refactor
+`wrap_only*` directories are partial `status: running` outputs and are not mixed
+into this table.  AgentDojo `plant-only` is reported on completed shard outputs
+only: 77/93 benign shards and 455/586 attack cases completed, with 26 shard
+outputs still marked incomplete/running.
+
+Several only-mode rows have smaller denominators than the corresponding `full`
+row because the available ablation artifacts were not rerun to full-benchmark
+coverage after the no-rerun constraint.  The table preserves the artifact
+denominators instead of extrapolating rates.
