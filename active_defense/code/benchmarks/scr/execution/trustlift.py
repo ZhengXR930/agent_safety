@@ -153,7 +153,8 @@ class TrustLiftRuntime:
                  target_model: str = "deepseek-chat",
                  fusion_dataset: dict | None = None,
                  registry_carrier: bool = True,
-                 clean_scan_only: bool = False):
+                 clean_scan_only: bool = False,
+                 ablation_mode: str = "full"):
         self.case = Case.prepare(case_dir, scratch)
         if clean_scan_only:
             _make_scan_only_clean(self.case.skill_dir)
@@ -179,7 +180,9 @@ class TrustLiftRuntime:
             raise ValueError(
                 "Skill surface compiler did not uniquely resolve registry.json")
         self.registry_card = registry_cards[0] if registry_cards else None
-        self.engine = Engine(defense_model, approval_enabled=False)
+        self.engine = Engine(
+            defense_model, approval_enabled=False,
+            ablation_mode=ablation_mode)
         registrations = [
             {"name": tool["name"], "description": tool["description"],
              "inputSchema": tool["inputSchema"],
@@ -216,7 +219,8 @@ class TrustLiftRuntime:
         PLANT Placement Agent has already selected its compiled SurfaceCard.
         """
         if (not self.registry_carrier or self.registry_card is None or
-                self.registry_card.id not in set(selected_artifacts or ())):
+                self.registry_card.id not in set(selected_artifacts or ()) or
+                not getattr(episode, "plant_enabled", True)):
             return {"token": None, "registry_entry": None, "deployed": False}
         state = {
             "kind": "installable-skill-registry",
@@ -508,6 +512,9 @@ def main() -> None:
                         help="trusted user task; the default authorizes scanning only")
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
+    parser.add_argument("--ablation-mode",
+                        choices=("full", "wrap_only", "plant_only"),
+                        default="full")
     parser.add_argument(
         "--no-registry-carrier", action="store_true",
         help="ablation: disable the registered TrustLift state carrier")
@@ -535,7 +542,8 @@ def main() -> None:
         target_model=args.model,
         fusion_dataset=fusion_dataset,
         registry_carrier=not args.no_registry_carrier,
-        clean_scan_only=args.clean_scan_only)
+        clean_scan_only=args.clean_scan_only,
+        ablation_mode=args.ablation_mode)
     contract = None
     if args.contract_file:
         contract = TaskContract.from_dict(json.loads(

@@ -14,22 +14,27 @@ SCR = REPO.parent / "benchmarks" / "SCR_Bench"
 CAPFLOW_MANIFEST = Path(__file__).resolve().parents[1] / "data" / "capflow.json"
 sys.path.insert(0, str(REPO))
 
-from code.benchmarks.scr.execution.clawguard import load_auth_cases  # noqa: E402
 from code.benchmarks.scr.execution.capflow import (_condition_name, _load_case,
                                       _manifest, _supports_case)  # noqa: E402
-from code.benchmarks.scr.execution.authblur import authblur_tools  # noqa: E402
 from code.benchmarks.scr.execution.fusion_overlay import load_suite  # noqa: E402
 from code.benchmarks.scr.execution.trustlift import SCAN_TASK, TOOLS as TRUSTLIFT_TOOLS  # noqa: E402
 from code.benchmarks.scr.runtime import SkillRuntime  # noqa: E402
 from code.core.manifest import validate_registrations  # noqa: E402
+from code.ours.manifests.scr import authblur_tools  # noqa: E402
 from code.ours.defense.contract import EffectClause  # noqa: E402
 from code.ours.defense.engine import Engine  # noqa: E402
 
 
 TARGET_MODEL = "deepseek-v4-flash"
 DEFENSE_MODEL = "gpt-5.5-2026-04-24"
+FROZEN_CONTRACT_ROOT = REPO / "code" / "ours" / "contracts" / "scr"
 CAPFLOW_CONDITIONS = (
     "A_only", "B_only", "A+B_neutral", "A+B_explicit")
+
+
+def load_auth_cases(scr_root: Path, case_ids=None):
+    from code.benchmarks.scr.execution.clawguard import load_auth_cases as load
+    return load(scr_root, case_ids)
 
 
 def _inspect(task, contract):
@@ -54,7 +59,8 @@ def _write_contract(path: Path, contracts: dict, quality: dict) -> None:
 
 def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
           capflow_cases=None, *, target_model=TARGET_MODEL,
-          defense_model=DEFENSE_MODEL, fusion_dataset=""):
+          defense_model=DEFENSE_MODEL, fusion_dataset="",
+          ablation_mode="full", contract_root: Path | None = None):
     fusion_cases: dict[str, set[str]] = {}
     if fusion_dataset:
         for suite in ("capflow", "authblur", "trustlift"):
@@ -68,7 +74,8 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
         module, _ = _load_case(SCR, case)
         if _supports_case(module):
             target = output / "capflow" / f"case{case:03d}.json"
-            contract = output / "contracts" / "capflow" / f"case{case:03d}.json"
+            contract = ((contract_root or output / "contracts") /
+                        "capflow" / f"case{case:03d}.json")
             conditions = [part for condition in capflow_conditions
                           for part in ("--condition", condition)]
             command = [
@@ -76,6 +83,7 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                 "--scr-root", str(SCR), "--manifest-file", str(CAPFLOW_MANIFEST),
                 "--case", str(case), *conditions, "--target-model", target_model,
                 "--defense-model", defense_model,
+                "--ablation-mode", ablation_mode,
                 "--contract-file", str(contract), "--output", str(target)]
             if fusion_dataset:
                 command.extend(["--fusion-dataset", fusion_dataset])
@@ -89,11 +97,13 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                     *(value[0] for value in config["conditions"].values())}
         if all((skills / name / "SKILL.md").is_file() for name in required):
             target = output / "authblur" / f"case{case:03d}.json"
-            contract = output / "contracts" / "authblur" / f"case{case:03d}.json"
+            contract = ((contract_root or output / "contracts") /
+                        "authblur" / f"case{case:03d}.json")
             command = [
                 sys.executable, "-m", "code.benchmarks.scr.execution.authblur",
                 "--scr-root", str(SCR), "--case", str(case),
                 "--model", target_model, "--defense-model", defense_model,
+                "--ablation-mode", ablation_mode,
                 "--contract-file", str(contract),
                 "--output", str(target)]
             if fusion_dataset:
@@ -116,7 +126,9 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                 "--condition", "control" if condition == "clean" else "attack",
                 "--scratch", str(scratch), "--model", target_model,
                 "--defense-model", defense_model,
-                "--contract-file", str(output / "contracts" / "trustlift.json"),
+                "--ablation-mode", ablation_mode,
+                "--contract-file", str((contract_root or output / "contracts") /
+                                       "trustlift.json"),
                 "--output", str(target), *extra]
             if fusion_dataset:
                 command.extend(["--fusion-dataset", fusion_dataset])
@@ -239,6 +251,10 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--target-model", default=TARGET_MODEL)
     parser.add_argument("--defense-model", default=DEFENSE_MODEL)
+    parser.add_argument("--ablation-mode",
+                        choices=("full", "wrap_only", "plant_only"),
+                        default="full")
+    parser.add_argument("--frozen-contract-root", default="")
     parser.add_argument("--suite", action="append",
                         choices=("capflow", "authblur", "trustlift"))
     parser.add_argument("--phase", choices=("preflight", "evaluate", "all"),
@@ -253,6 +269,8 @@ def main() -> None:
         help="optional SCR fusion manifest/directory; forwarded to suite runners")
     args = parser.parse_args()
     output = Path(args.output_root)
+    contract_root = (Path(args.frozen_contract_root).resolve()
+                     if args.frozen_contract_root else None)
     output.mkdir(parents=True, exist_ok=True)
     suites = set(args.suite or ("capflow", "authblur", "trustlift"))
     capflow_conditions = tuple(
@@ -281,7 +299,9 @@ def main() -> None:
                 output, capflow_conditions, args.capflow_case,
                 target_model=args.target_model,
                 defense_model=args.defense_model,
-                fusion_dataset=args.fusion_dataset)
+                fusion_dataset=args.fusion_dataset,
+                ablation_mode=args.ablation_mode,
+                contract_root=contract_root)
             if job[0] in suites]
 
     def run(job):
