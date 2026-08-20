@@ -281,14 +281,15 @@ This thread reports the original-benchmark ablation results for the refactored
 shared defense stack under `deepseek-v4-flash` as both target model and defense
 model.  `full` is the complete Ours configuration; `wrap-only` disables PLANT;
 `plant-only` disables WRAP.  Results are read from
-`experiment_results/ablation_original/DeepSeek_refactor/`.
+`experiment_results/ablation_original/DeepSeek_refactor/` except where a row is
+explicitly marked as an older partial artifact.
 
 ### Ablation Table
 
 | Benchmark | Mode | BU | AU | ASR |
 |---|---|---:|---:|---:|
 | AgentDojo | full | 84/97 (86.6%) | 505/629 (80.3%) | 0/629 (0.0%) |
-| AgentDojo | wrap-only | N/A | N/A | N/A |
+| AgentDojo | wrap-only | 27/32 (84.4%) | 156/195 (80.0%) | 0/195 (0.0%) |
 | AgentDojo | plant-only | 70/77 (90.9%) | 394/455 (86.6%) | 0/455 (0.0%) |
 | ASB-OPI | full | 46/51 (90.2%) | 1735/2040 (85.0%) | 0/2040 (0.0%) |
 | ASB-OPI | wrap-only | 45/51 (88.2%) | 1662/2040 (81.5%) | 0/2040 (0.0%) |
@@ -308,13 +309,15 @@ model.  `full` is the complete Ours configuration; `wrap-only` disables PLANT;
 
 ### Notes
 
-AgentDojo `wrap-only` is not reported because
-`experiment_results/ablation_original/DeepSeek_refactor/AgentDojo/wrap_only/`
-does not contain a complete refactor-run artifact; older non-refactor
-`wrap_only*` directories are partial `status: running` outputs and are not mixed
-into this table.  AgentDojo `plant-only` is reported on completed shard outputs
-only: 77/93 benign shards and 455/586 attack cases completed, with 26 shard
-outputs still marked incomplete/running.
+AgentDojo `wrap-only` uses the most complete existing partial artifact,
+`experiment_results/ablation_original/DeepSeek/AgentDojo/wrap_only_frozen_tracefix/`.
+It covers completed banking and slack shards only: 32/37 benign cases and
+195/249 attack cases completed, with both suite outputs still marked
+`status: running`.  No complete refactor-run artifact is present under
+`experiment_results/ablation_original/DeepSeek_refactor/AgentDojo/wrap_only/`.
+AgentDojo `plant-only` is also reported on completed shard outputs only: 77/93
+benign shards and 455/586 attack cases completed, with 26 shard outputs still
+marked incomplete/running.
 
 Several only-mode rows have smaller denominators than the corresponding `full`
 row because the available ablation artifacts were not rerun to full-benchmark
