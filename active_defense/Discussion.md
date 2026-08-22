@@ -201,7 +201,7 @@ Artifacts:
 `experiment_results/SCR/SkillJect-fusion/official_composition_capflow_comparison_metrics.json`,
 `experiment_results/SCR/SkillJect-fusion/official_composition_capflow_baseline_utility_full.json`,
 `experiment_results/SCR/ClawGuard/DeepSeek/skillject_official_composition_capflow_approval3/metrics.json`,
-`experiment_results/fusion_eval_20260818/SCR/ours_contract_fix_merged/MERGE_NOTES.md`
+`experiment_results/SCR/SkillJect-fusion/official_composition_capflow_ours_contract_fix_merged_MERGE_NOTES.md`
 
 | Schema | AU | AU-original | ASR | ASR-original |
 |---|---:|---:|---:|---:|
