@@ -17,7 +17,7 @@ from code.ours.defense.continuation import (REPAIR, REPLAN,
                                        ContinuationController)
 from code.ours.defense.receipt_binding import bind_acquire, bind_effect_return
 from code.ours.defense.plant import CALL, RESPONSE, CommitEvent, Plant
-from code.ours.defense.memory import argument_values_equal
+from code.ours.defense.memory import SourceSurface, argument_values_equal
 from code.ours.defense.state import Receipt, RuntimeState, UNRESOLVED, digest
 from code.ours.defense.proof import apply_placements, compile_goals
 from code.ours.defense.wrap import authority_atoms, check_effect
@@ -433,6 +433,24 @@ class Episode:
             "paths": (),
         }
         return decoy.token
+
+    def arm_attested_substrate(self, carrier: str, sample, *,
+                               description: str = "",
+                               kind: str = "state") -> str:
+        """Arm one substrate after adapter-side deployability attestation.
+
+        The carrier may originate from a Skill/MCP surface card rather than from
+        the global perception plan.  The placement role can select the card, but
+        deterministic adapter code must verify inert deployment and exact
+        interaction attestation before calling this method.
+        """
+        if not self.plant_enabled:
+            return ""
+        carrier = str(carrier)
+        if carrier not in self.plant.surfaces:
+            self.plant.surfaces[carrier] = SourceSurface(
+                carrier, str(description), True, str(kind))
+        return self.arm_substrate(carrier, sample)
 
     def place_substrate(self, carrier: str, state, *, schema=None) -> str | None:
         """Ask the shared placement role whether to arm a state/control slot.
