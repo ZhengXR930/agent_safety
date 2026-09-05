@@ -44,6 +44,7 @@ Updated: 2026-08-18
 | ClawGuard | 82/180 (45.6%) | 82/180 (45.6%) | 13/180 (7.2%) |
 | Progent | 115/180 (63.9%) | 113/180 (62.8%) | 28/180 (15.6%) |
 | TaskShield | 96/180 (53.3%) | 105/180 (58.3%) | 10/180 (5.6%) |
+| DynamicGuardian | 136/180 (75.6%) | 141/180 (78.3%) | 11/180 (6.1%) |
 
 ### SCR
 
@@ -54,6 +55,7 @@ Updated: 2026-08-18
 | CapFlow · ClawGuard | 0/150 (0.0%) | 131/150 (87.3%) | **0/150 (0.0%)** |
 | CapFlow · Progent | **144/150 (96.0%)** | 56/150 (37.3%) | 92/150 (61.3%) |
 | CapFlow · TaskShield | 118/150 (78.7%) | 75/150 (50.0%) | 63/150 (42.0%) |
+| CapFlow · DynamicGuardian | 147/150 (98.0%) | 38/150 (25.3%) | 110/150 (73.3%) |
 | AuthBlur · Ours | 115/116 (99.1%) | **116/116 (100.0%)** | **0/116 (0.0%)** |
 | AuthBlur · Undefended | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
 | AuthBlur · TaskShield | **116/116 (100.0%)** | 115/116 (99.1%) | 82/116 (70.7%) |
@@ -63,6 +65,7 @@ Updated: 2026-08-18
 | TrustLift · ClawGuard | 26/401 (6.5%) | 26/401 (6.5%) | 26/401 (6.5%) |
 | TrustLift · Progent | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · TaskShield | 325/401 (81.0%) | 315/401 (78.6%) | 315/401 (78.6%) |
+| TrustLift · DynamicGuardian | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 
 ### MCPTox
 
@@ -292,7 +295,7 @@ explicitly marked as a partial artifact.
 |---|---|---:|---:|---:|
 | AgentDojo | full | 84/97 (86.60%) | 505/629 (80.29%) | 0/629 (0.00%) |
 | AgentDojo | wrap-only | 76/97 (78.35%) | 481/629 (76.47%) | 3/629 (0.48%) |
-| AgentDojo | plant-only | 70/77 (90.91%) | 394/455 (86.59%) | 0/455 (0.00%) |
+| AgentDojo | plant-only | 88/97 (90.72%) | 537/629 (85.37%) | 0/629 (0.00%) |
 | ASB-OPI | full | 46/51 (90.20%) | 1735/2040 (85.05%) | 0/2040 (0.00%) |
 | ASB-OPI | wrap-only | 45/51 (88.24%) | 1662/2040 (81.47%) | 0/2040 (0.00%) |
 | ASB-OPI | plant-only | 44/51 (86.27%) | 1168/1678 (69.61%) | 1003/1678 (59.77%) |
@@ -316,9 +319,10 @@ AgentDojo `wrap-only` is the completed refactor-run artifact under
 The workspace tail was completed through disjoint temporary shards under
 `workspace_remaining_shards_20260821_1615/` and merged back into
 `workspace.json` by `(task, injection)` key.
-AgentDojo `plant-only` is reported on completed shard outputs only: 77/93
-benign shards and 455/586 attack cases completed, with 26 shard outputs still
-marked incomplete/running.
+AgentDojo `plant-only` is now reported on the full benchmark (629 attack + 97
+benign).  The workspace suite tail was completed through 8 disjoint per-task
+shards under `._shards8_*/` and merged back into `workspace.json` by
+`(task, injection)` key.
 
 Several only-mode rows have smaller denominators than the corresponding `full`
 row because the available ablation artifacts were not rerun to full-benchmark
