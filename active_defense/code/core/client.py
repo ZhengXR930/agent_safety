@@ -39,6 +39,7 @@ class _UsageTracker:
             self.prompt_tokens = 0
             self.completion_tokens = 0
             self.total_tokens = 0
+            self.by_model = {}
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -47,23 +48,59 @@ class _UsageTracker:
                 "prompt_tokens": self.prompt_tokens,
                 "completion_tokens": self.completion_tokens,
                 "total_tokens": self.total_tokens,
+                "by_model": {k: dict(v) for k, v in self.by_model.items()},
             }
 
-    def record(self, response) -> None:
+    def record(self, response, model: str | None = None) -> None:
         usage = getattr(response, "usage", None)
         pt = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
         ct = int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0
         tt = int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
         if usage and not tt:
             tt = pt + ct
+        key = str(model or getattr(response, "model", "") or "unknown")
         with self._lock:
             self.calls += 1
             self.prompt_tokens += pt
             self.completion_tokens += ct
             self.total_tokens += tt
+            slot = self.by_model.setdefault(
+                key, {"calls": 0, "prompt_tokens": 0,
+                      "completion_tokens": 0, "total_tokens": 0})
+            slot["calls"] += 1
+            slot["prompt_tokens"] += pt
+            slot["completion_tokens"] += ct
+            slot["total_tokens"] += tt
 
 
 USAGE = _UsageTracker()
+
+
+def _maybe_install_usage_dump() -> None:
+    """If USAGE_DUMP_PATH is set, write USAGE.snapshot() at process exit.
+
+    This lets any benchmark runner emit clean per-model token accounting for
+    efficiency measurement without editing each runner's CLI.
+    """
+    path = os.environ.get("USAGE_DUMP_PATH")
+    if not path:
+        return
+    import atexit
+    import json as _json
+
+    def _dump():
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(
+                _json.dumps(USAGE.snapshot(), ensure_ascii=False, indent=2),
+                encoding="utf-8")
+        except Exception:
+            pass
+
+    atexit.register(_dump)
+
+
+_maybe_install_usage_dump()
 
 
 def _with_usage_accounting(client):
@@ -80,7 +117,7 @@ def _with_usage_accounting(client):
         async def create(*args, **kwargs):
             response = await original(*args, **kwargs)
             try:
-                USAGE.record(response)
+                USAGE.record(response, kwargs.get("model"))
             except Exception:  # never let accounting break a call
                 pass
             return response
@@ -88,7 +125,7 @@ def _with_usage_accounting(client):
         def create(*args, **kwargs):
             response = original(*args, **kwargs)
             try:
-                USAGE.record(response)
+                USAGE.record(response, kwargs.get("model"))
             except Exception:
                 pass
             return response
@@ -217,7 +254,7 @@ def _with_api_logging(client, model: str, provider: str):
             user="active_defense", duration_ms=(time.time() - started) * 1000,
             success=True, metadata={"provider": provider})
         try:
-            USAGE.record(response)
+            USAGE.record(response, model)
         except Exception:
             pass
         return response
