@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -20,6 +21,81 @@ from openai import OpenAI, AzureOpenAI
 
 # active_defense/code/core/client.py -> agent_safety root is parents[3]
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+# --- Process-wide token/usage accounting (efficiency stats) -----------------
+# Every LLM call in this project ultimately goes through a client's
+# `chat.completions.create` (sync via client_for_model, async via
+# agent_sdk_model).  We install a lightweight wrapper on both so a single
+# accumulator captures provider-reported token usage without estimation.
+class _UsageTracker:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.reset()
+
+    def reset(self) -> None:
+        with self._lock:
+            self.calls = 0
+            self.prompt_tokens = 0
+            self.completion_tokens = 0
+            self.total_tokens = 0
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "calls": self.calls,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
+            }
+
+    def record(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        pt = int(getattr(usage, "prompt_tokens", 0) or 0) if usage else 0
+        ct = int(getattr(usage, "completion_tokens", 0) or 0) if usage else 0
+        tt = int(getattr(usage, "total_tokens", 0) or 0) if usage else 0
+        if usage and not tt:
+            tt = pt + ct
+        with self._lock:
+            self.calls += 1
+            self.prompt_tokens += pt
+            self.completion_tokens += ct
+            self.total_tokens += tt
+
+
+USAGE = _UsageTracker()
+
+
+def _with_usage_accounting(client):
+    """Wrap a sync or async client's create() to feed the global USAGE tracker."""
+    try:
+        original = client.chat.completions.create
+    except AttributeError:
+        return client
+    if getattr(original, "_usage_wrapped", False):
+        return client
+    import inspect
+
+    if inspect.iscoroutinefunction(original):
+        async def create(*args, **kwargs):
+            response = await original(*args, **kwargs)
+            try:
+                USAGE.record(response)
+            except Exception:  # never let accounting break a call
+                pass
+            return response
+    else:
+        def create(*args, **kwargs):
+            response = original(*args, **kwargs)
+            try:
+                USAGE.record(response)
+            except Exception:
+                pass
+            return response
+
+    create._usage_wrapped = True  # type: ignore[attr-defined]
+    client.chat.completions.create = create  # type: ignore[assignment]
+    return client
 
 DEFAULT_INTERNAL_BASE_URL = (
     "https://aidp.bytedance.net/api/modelhub/online/v2/crawl/openai/deployments/gpt_openapi"
@@ -120,7 +196,7 @@ def _with_api_logging(client, model: str, provider: str):
     try:
         from api.local_api_logger.logger import APILogger
     except ImportError:
-        return client
+        return _with_usage_accounting(client)
     logger = APILogger(str(Path(__file__).resolve().parents[2] / "api/api_logs"))
     original = client.chat.completions.create
 
@@ -140,6 +216,10 @@ def _with_api_logging(client, model: str, provider: str):
             model=model, request_data=dict(kwargs), response_data=data,
             user="active_defense", duration_ms=(time.time() - started) * 1000,
             success=True, metadata={"provider": provider})
+        try:
+            USAGE.record(response)
+        except Exception:
+            pass
         return response
 
     client.chat.completions.create = create
@@ -268,7 +348,8 @@ def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
         key = read_config_key("DEEPSEEK_API_KEY", root=root)
         if not key:
             raise RuntimeError("Missing DEEPSEEK_API_KEY (environment or config.txt).")
-        client = AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key, timeout=90.0)
+        client = _with_usage_accounting(
+            AsyncOpenAI(base_url=DEEPSEEK_BASE_URL, api_key=key, timeout=90.0))
         return OpenAIChatCompletionsModel(
             DEEPSEEK_TRANSPORT_MODELS.get(model, model), client)
     if model in OPENAI_COMPATIBLE_GATEWAYS:
@@ -279,7 +360,8 @@ def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
         url = os.environ.get(url_env) or read_config_key(
             url_env, root=root) or default_url
         return OpenAIChatCompletionsModel(
-            model, AsyncOpenAI(base_url=url, api_key=key, timeout=90.0))
+            model, _with_usage_accounting(
+                AsyncOpenAI(base_url=url, api_key=key, timeout=90.0)))
     if model in MODEL_REGISTRY:
         key = read_config_key(api_key_env, root=root)
         if not key:
@@ -291,13 +373,13 @@ def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
             default_headers={"Api-Key": key},
             timeout=90.0,
         )
-        return OpenAIChatCompletionsModel(model, client)
+        return OpenAIChatCompletionsModel(model, _with_usage_accounting(client))
     key = read_config_key(api_key_env, root=root)
     if not key:
         raise RuntimeError(
             f"Missing {api_key_env} (environment or repository config.txt).")
-    client = AsyncOpenAI(
+    client = _with_usage_accounting(AsyncOpenAI(
         base_url=os.environ.get(
             "INTERNAL_OPENAI_BASE_URL", DEFAULT_INTERNAL_BASE_URL),
-        api_key=key, default_headers={"Api-Key": key}, timeout=90.0)
+        api_key=key, default_headers={"Api-Key": key}, timeout=90.0))
     return OpenAIChatCompletionsModel(model, client)
