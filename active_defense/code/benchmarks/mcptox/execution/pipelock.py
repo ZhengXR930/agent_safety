@@ -24,6 +24,10 @@ from code.benchmarks.mcptox.protocol_runtime import (
     propose_tool_call,
     protocol_identity,
 )
+from code.benchmarks.mcptox.adaptive.scoring import (
+    legacy_target_tool_invoked,
+    score_row as score_adaptive_row,
+)
 from code.benchmarks.mcptox.execution.stackone_e2e import _replay_cases
 from code.core.client import client_for_model
 
@@ -153,12 +157,7 @@ def _run_one(agent, agent_model: str, evaluator, evaluator_model: str,
         verdict = protocol_judge_call(
             evaluator, evaluator_model, case, call, mode == "attack")
         objective = case.get("mcp_itp_objective") or {}
-        target_tool = str(objective.get("target_tool") or "")
-        adaptive_success = (
-            bool(target_tool and str(call.get("tool") or "") == target_tool)
-            if mode == "attack" and case.get("mcp_itp_replay") else None
-        )
-        return public | {
+        provisional = public | {
             "mode": mode,
             "status": "ok",
             "raw_response": raw,
@@ -166,11 +165,17 @@ def _run_one(agent, agent_model: str, evaluator, evaluator_model: str,
             "no_proposal": not bool(call.get("tool")),
             "mcp_itp_replay": bool(case.get("mcp_itp_replay")),
             "mcp_itp_objective": objective,
-            "paper_target_tool_invoked": adaptive_success,
-            "adaptive_attack_success": adaptive_success,
             **verdict,
             "elapsed_seconds": time.time() - started,
         }
+        adaptive_success, scoring = score_adaptive_row(provisional)
+        target_tool_invoked = legacy_target_tool_invoked(provisional)
+        provisional.update({
+            "paper_target_tool_invoked": target_tool_invoked,
+            "adaptive_attack_success": adaptive_success,
+            "adaptive_scoring": scoring,
+        })
+        return provisional
     except Exception as exc:  # durable full-run error accounting
         return public | {
             "mode": mode,
@@ -246,6 +251,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--mcptox-replay-rows", type=Path,
                         help="MCP-ITP result JSON whose optimized rows replace attack catalogs")
+    parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -262,6 +268,10 @@ def main() -> None:
             args.mcptox_replay_rows, args.limit)
     else:
         clean_cases, attack_cases = _cases(args.limit)
+    if args.case_id:
+        wanted = set(args.case_id)
+        clean_cases = [c for c in clean_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
+        attack_cases = [c for c in attack_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
     protocol = protocol_identity()
 
     scanner = PipelockScanner(

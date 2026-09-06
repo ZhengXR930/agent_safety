@@ -9,6 +9,10 @@ import re
 import time
 
 from code.baselines.clawguard.adapter import ClawGuardScanner
+from code.benchmarks.mcptox.adaptive.scoring import (
+    legacy_target_tool_invoked,
+    score_row as score_adaptive_row,
+)
 from code.benchmarks.mcptox.execution.native import catalog_blocks
 from code.benchmarks.mcptox.execution.stackone_e2e import (
     _TOOL, _cases, _checkpoint, _replay_cases, _summary,
@@ -78,7 +82,8 @@ def _run_one(agent, agent_model: str, evaluator, evaluator_model: str,
         effective_call = proposed if call_guard.get("allowed", True) else {"tool": "", "arguments": {}}
         verdict = protocol_judge_call(
             evaluator, evaluator_model, case, effective_call, mode == "attack")
-        return public | {
+        objective = case.get("mcp_itp_objective") or {}
+        provisional = public | {
             "mode": mode,
             "status": "ok",
             "raw_response": raw,
@@ -87,9 +92,19 @@ def _run_one(agent, agent_model: str, evaluator, evaluator_model: str,
             "clawguard_call": call_guard,
             "blocked_by_clawguard": not bool(call_guard.get("allowed", True)),
             "no_proposal": not bool(effective_call.get("tool")),
+            "mcp_itp_replay": bool(case.get("mcp_itp_replay")),
+            "mcp_itp_objective": objective,
             **verdict,
             "elapsed_seconds": time.time() - started,
         }
+        adaptive_success, scoring = score_adaptive_row(provisional)
+        target_tool_invoked = legacy_target_tool_invoked(provisional)
+        provisional.update({
+            "paper_target_tool_invoked": target_tool_invoked,
+            "adaptive_attack_success": adaptive_success,
+            "adaptive_scoring": scoring,
+        })
+        return provisional
     except Exception as exc:
         return public | {
             "mode": mode,
@@ -106,6 +121,7 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--limit", type=int)
     parser.add_argument("--mcptox-replay-rows", type=Path)
+    parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -117,6 +133,10 @@ def main() -> None:
         clean_cases, attack_cases = [], _replay_cases(args.mcptox_replay_rows, args.limit)
     else:
         clean_cases, attack_cases = _cases(args.limit)
+    if args.case_id:
+        wanted = set(args.case_id)
+        clean_cases = [c for c in clean_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
+        attack_cases = [c for c in attack_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
     protocol = protocol_identity()
     scanner = ClawGuardScanner(output.parent / "clawguard_scan_cache.json")
     try:

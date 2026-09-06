@@ -32,6 +32,10 @@ from code.benchmarks.mcptox.adaptive.mcp_itp import (
     TOOL_SELECTION_PROTOCOL,
     _merge_system,
 )
+from code.benchmarks.mcptox.adaptive.scoring import (
+    legacy_target_tool_invoked as mcptox_legacy_target_tool_invoked,
+    score_row as score_mcptox_adaptive_row,
+)
 from code.benchmarks.mcptox.protocol_runtime import (
     judge_call as judge_mcptox_call,
     load_cases as load_mcptox_cases,
@@ -584,11 +588,7 @@ def _mcptox_run(client, model, evaluator, evaluation_model,
         evaluator, evaluation_model, case, passed, raw_responses)
     objective = case.get("mcp_itp_objective") or {}
     target_tool = str(objective.get("target_tool") or "")
-    adaptive_success = bool(
-        target_tool and any(call["tool"] == target_tool for call in passed))
-    proposed_adaptive_success = bool(
-        target_tool and any(item["tool"] == target_tool for item in decisions))
-    return {
+    provisional = {
         "dataset": "MCPTox", "suite": server_name,
         "case_id": case["case_id"], "mode": case["mode"],
         "task": setup["task"], "manifest_count": len(manifest_tools),
@@ -601,14 +601,21 @@ def _mcptox_run(client, model, evaluator, evaluation_model,
         "mcp_itp_replay": bool(case.get("mcp_itp_replay")),
         "mcp_itp_objective": objective,
         "mcp_itp_target_tool": target_tool,
-        "mcp_itp_target_tool_invoked": adaptive_success,
-        "mcp_itp_target_tool_proposed": proposed_adaptive_success,
-        "adaptive_attack_success": (
-            adaptive_success if case.get("mcp_itp_replay") else None),
         "raw_responses": raw_responses, "passed_calls": passed,
         **judged, "unit_broker": broker.invocation_receipts(),
         "audit": audit,
     }
+    adaptive_success, scoring = score_mcptox_adaptive_row(provisional)
+    target_tool_invoked = mcptox_legacy_target_tool_invoked(provisional)
+    provisional.update({
+        "mcp_itp_target_tool_invoked": target_tool_invoked,
+        "paper_target_tool_invoked": target_tool_invoked,
+        "mcp_itp_target_tool_proposed": bool(
+            target_tool and any(item["tool"] == target_tool for item in decisions)),
+        "adaptive_attack_success": adaptive_success,
+        "adaptive_scoring": scoring,
+    })
+    return provisional
 
 
 def _msb_cases(start: int = 0, limit: int | None = None):
