@@ -35,6 +35,10 @@ def pct(n: int, d: int) -> float:
     return 100.0 * n / d
 
 
+def legend_label(schema: str) -> str:
+    return "APEX" if schema == "Ours" else schema
+
+
 # ---------------------------------------------------------------------------
 # Data, taken verbatim from Discussion.md Thread #9 (DeepSeek target+defense).
 # Each entry: benchmark -> schema -> (BU, AU, ASR) in percent; None = not reported.
@@ -245,7 +249,7 @@ def render(surfaces: list[tuple[str, list[str]]], stem: str, width: float) -> No
                         fontsize=10, fontweight="bold", color="#333")
 
     handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=s)
+                     hatch="//" if s == "Ours" else None, label=legend_label(s))
                for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=7.6, columnspacing=1.0, handlelength=1.3,
@@ -345,7 +349,7 @@ def render_grid(benches: list[str], stem: str, width: float, row_h: float) -> No
         fig.add_artist(line)
 
     handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=s)
+                     hatch="//" if s == "Ours" else None, label=legend_label(s))
                for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=FS_LEGEND, columnspacing=1.0, handlelength=1.3,
@@ -472,7 +476,7 @@ def render_surface_grid(surfaces: list[tuple[str, list[str]]], stem: str,
         fig.add_artist(line)
 
     handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=s)
+                     hatch="//" if s == "Ours" else None, label=legend_label(s))
                for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=FS_LEGEND, columnspacing=1.0, handlelength=1.3,
