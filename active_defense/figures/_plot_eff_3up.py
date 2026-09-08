@@ -98,7 +98,7 @@ LABEL_OFFSETS = {
         "Undefended": (28, 18, "left"),
     },
     "SkillInject": {
-        "APEX": (-30, 0, "right"),
+        "APEX": (22, 18, "left"),
         "DynamicGuardian": (25, -12, "left"),
         "Progent": (-18, -25, "right"),
         "TaskShield": (27, 0, "left"),
