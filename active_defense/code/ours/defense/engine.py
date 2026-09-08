@@ -195,6 +195,15 @@ class Episode:
         # authorized invocation succeeds; consuming this queue then links the
         # return to matching Acquire roles without model involvement.
         self._authorized_effect_returns: dict[tuple[str, str], list[str]] = {}
+        # Deterministic route-verdict memo. In runaway replan loops the Agent
+        # re-submits equivalent already-rejected candidates; each one otherwise
+        # re-invokes the Binding Agent (whose own cache key folds in the
+        # state-dependent proof goals, so it can miss) and re-runs the WRAP
+        # check. Keyed on the exact inputs that determine the verdict — action,
+        # arguments, the immutable Receipt snapshot, the value-scoped
+        # restrictions, and the cited authority — a hit is provably identical to
+        # recomputation, so reusing it changes cost only, never semantics.
+        self._verdict_memo: dict[tuple, object] = {}
         # Identity carriers have two planes. The Agent sees a readable view
         # plus an opaque episode-local handle; only the broker can recover the
         # exact operator-issued value accepted by the native boundary. This
@@ -221,6 +230,7 @@ class Episode:
         self._acquire_cache.clear()
         self._proposal_binding_cache.clear()
         self._authorized_effect_returns.clear()
+        self._verdict_memo.clear()
         self._reconcile()
 
     # -- observation --------------------------------------------------------
@@ -240,6 +250,11 @@ class Episode:
             key = (receipt.capability, digest(receipt.arguments))
             clauses = self._authorized_effect_returns.get(key, [])
             if clauses:
+                # WRAP authorized this exact Effect, so its committed return is
+                # an authorized fact of the episode even when no Acquire role
+                # owns it. Mark it so a later Effect argument can trace to this
+                # authorized product deterministically (see proof.py).
+                self.state.authorized_effect_returns.add(receipt.digest)
                 bind_effect_return(
                     self.state, self.contract, receipt, clauses.pop(0))
                 if not clauses:
@@ -1113,47 +1128,61 @@ class Episode:
         if authority_required and not authority:
             return Decision(
                 "deny", "insufficient-authority-proof", detections=seen)
-        self._reconcile()
-        semantic_proofs, delegated_proofs, _placements = (
-            self._resolve_proposal_bindings(str(action), arguments, surface))
-        if authority:
-            # A trusted adapter may declare that this Root Effect is conferred
-            # by cited, runtime-issued granting premises. Those receipts—not a
-            # semantic model—then close its unresolved ordinary roles. Literal
-            # conflicts and undeclared arguments remain impossible in WRAP.
-            authority_refs = tuple(receipt.id for receipt in authority)
-            for clause in self.contract.clauses:
-                if not (isinstance(clause, EffectClause) and
-                        clause.action == str(action)):
-                    continue
-                for name, spec in clause.effect_arguments.items():
-                    if (name in arguments and isinstance(spec, dict) and
-                            set(spec) == {"from"}):
-                        semantic_proofs.setdefault(
-                            (clause.id, name), authority_refs)
+        # Runaway replan loops re-submit equivalent already-rejected candidates.
+        # The WRAP verdict is a pure function of these inputs (action,
+        # arguments, the immutable Receipt snapshot, the value-scoped
+        # restrictions, and the cited authority), so a memo hit is identical to
+        # recomputation — it only skips the Binding Agent call and the WRAP
+        # replay, never altering the route. Continuation bookkeeping below still
+        # runs so replan/abort budgets advance exactly as before.
+        restricted = (self.continuation.restricted_arguments_for(
+            str(action), arguments) if self.continuation is not None else ())
         required = frozenset(getattr(surface, "required", ()) or ())
-        content = frozenset(
-            name for name in (getattr(surface, "arguments", ()) or ())
-            if surface is not None and surface.accepts_semantic_support(name))
-        atoms = {
-            name: authority_atoms(
-                arguments.get(name), surface.authority_grammars(name))
-            for name in content if name in arguments}
-        defaults = {
-            name: schema["default"]
-            for name, schema in (getattr(
-                surface, "argument_schemas", ()) or ())
-            if isinstance(schema, dict) and "default" in schema}
-        verdict = check_effect(
-            self.state, self.contract, str(action), arguments,
-            required=required, content=content,
-            content_atoms=atoms, delegated_proofs=delegated_proofs,
-            semantic_proofs=semantic_proofs, defaults=defaults,
-            exact_only=(() if self.continuation is None else
-                        self.continuation.restricted_arguments_for(
-                            str(action), arguments)),
-            equal=lambda name, left, right: argument_values_equal(
-                surface, name, left, right))
+        memo_key = (str(action), digest(arguments),
+                    self.state.receipt_version,
+                    digest(tuple(sorted(str(ref) for ref in (proof_refs or ())))),
+                    digest(tuple(restricted)))
+        verdict = self._verdict_memo.get(memo_key)
+        if verdict is None:
+            self._reconcile()
+            semantic_proofs, delegated_proofs, _placements = (
+                self._resolve_proposal_bindings(str(action), arguments, surface))
+            if authority:
+                # A trusted adapter may declare that this Root Effect is conferred
+                # by cited, runtime-issued granting premises. Those receipts—not a
+                # semantic model—then close its unresolved ordinary roles. Literal
+                # conflicts and undeclared arguments remain impossible in WRAP.
+                authority_refs = tuple(receipt.id for receipt in authority)
+                for clause in self.contract.clauses:
+                    if not (isinstance(clause, EffectClause) and
+                            clause.action == str(action)):
+                        continue
+                    for name, spec in clause.effect_arguments.items():
+                        if (name in arguments and isinstance(spec, dict) and
+                                set(spec) == {"from"}):
+                            semantic_proofs.setdefault(
+                                (clause.id, name), authority_refs)
+            content = frozenset(
+                name for name in (getattr(surface, "arguments", ()) or ())
+                if surface is not None and surface.accepts_semantic_support(name))
+            atoms = {
+                name: authority_atoms(
+                    arguments.get(name), surface.authority_grammars(name))
+                for name in content if name in arguments}
+            defaults = {
+                name: schema["default"]
+                for name, schema in (getattr(
+                    surface, "argument_schemas", ()) or ())
+                if isinstance(schema, dict) and "default" in schema}
+            verdict = check_effect(
+                self.state, self.contract, str(action), arguments,
+                required=required, content=content,
+                content_atoms=atoms, delegated_proofs=delegated_proofs,
+                semantic_proofs=semantic_proofs, defaults=defaults,
+                exact_only=restricted,
+                equal=lambda name, left, right: argument_values_equal(
+                    surface, name, left, right))
+            self._verdict_memo[memo_key] = verdict
         if verdict.ok:
             if surface is not None and surface.committed_return:
                 key = (str(action), digest(arguments))

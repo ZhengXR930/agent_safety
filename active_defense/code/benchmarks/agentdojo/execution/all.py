@@ -20,6 +20,7 @@ MODULES = {
     "spotlighting": "code.benchmarks.agentdojo.execution.native",
     "tool_filter": "code.benchmarks.agentdojo.execution.native",
     "agentshield": "code.benchmarks.agentdojo.execution.agentshield",
+    "taskshield": "code.benchmarks.agentdojo.execution.taskshield",
 }
 
 
@@ -50,6 +51,8 @@ def main() -> None:
             value.extend(["--defense", args.method])
         if args.method == "progent" and args.defense_model:
             value.extend(["--policy-model", args.defense_model])
+        if args.method == "taskshield" and args.defense_model:
+            value.extend(["--guard-model", args.defense_model])
         if args.method in {"ours", "wrap_only", "plant_only"}:
             value.extend(["--contract-file", str(contracts / f"{suite}.json")])
             overrides = contracts / f"task_overrides_{suite}.json"

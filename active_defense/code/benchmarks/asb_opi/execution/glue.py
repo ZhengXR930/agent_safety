@@ -31,7 +31,7 @@ INJECTION_PROMPTS = {
 }
 METHODS = {
     "undefended", "ours", "wrap_only", "plant_only", "progent", "camel",
-    "drift", "melon", "spotlighting", "tool_filter", "agentshield",
+    "drift", "melon", "spotlighting", "tool_filter", "agentshield", "taskshield",
 }
 ACTIVE_DEFENSE_METHODS = {"ours", "wrap_only", "plant_only"}
 
@@ -687,6 +687,10 @@ def _prepare_method(
         guard = make_guard("progent", REPO, defense_model)
         guard.prepare(task, [tool.capability for tool in visible_tools])
         state.guard = guard
+    elif method == "taskshield":
+        guard = make_guard("taskshield", REPO, defense_model)
+        guard.prepare(task, [tool.capability for tool in visible_tools])
+        state.guard = guard
     elif method in ACTIVE_DEFENSE_METHODS:
         ablation_mode = {
             "ours": "full",
@@ -738,6 +742,10 @@ def _guard_tool_call(state: MethodState, tool: ASBTool | None, name: str, argume
     if method in {"undefended", "spotlighting", "tool_filter", "agentshield", *ACTIVE_DEFENSE_METHODS}:
         return GuardDecision("allow", "no baseline guard before runtime mediator")
     if method == "progent":
+        decision = state.guard.check(name, arguments, related_content=related_content)
+        state.events.append({"kind": "guard", "tool": name, "arguments": arguments, "route": decision.route, "reason": decision.reason})
+        return decision
+    if method == "taskshield":
         decision = state.guard.check(name, arguments, related_content=related_content)
         state.events.append({"kind": "guard", "tool": name, "arguments": arguments, "route": decision.route, "reason": decision.reason})
         return decision

@@ -82,6 +82,10 @@ class RuntimeState:
     # effect-return invocation. Unlike ordinary semantic Acquire ownership,
     # these edges need no later dynamic-call re-resolution.
     effect_return_bindings: set[tuple[str, str]] = field(default_factory=set)
+    # Digests of Receipts that WRAP authorized as an Effect return. Their
+    # committed arguments/return are authorized facts of this episode, usable as
+    # deterministic provenance for a later Effect argument without re-grounding.
+    authorized_effect_returns: set[str] = field(default_factory=set)
     superseded_receipts: set[str] = field(default_factory=set)
     bindings: dict[str, Binding] = field(default_factory=dict)
     supporting_clauses: list[dict] = field(default_factory=list)
@@ -125,7 +129,19 @@ class RuntimeState:
         """Record code-attested ownership of a successful Effect return."""
         changed = self.admit(clause_id, receipt)
         self.effect_return_bindings.add((str(clause_id), receipt.digest))
+        self.authorized_effect_returns.add(receipt.digest)
         return changed
+
+    def authorized_effect_receipts(self) -> tuple[Receipt, ...]:
+        """Active Receipts issued by a WRAP-authorized Effect return.
+
+        Their committed values are authorized facts of this episode, so a later
+        Effect argument that reuses one of them (for example running the exact
+        artifact a prior authorized ``write`` created) traces to real
+        provenance instead of a re-grounded semantic judgment.
+        """
+        return tuple(receipt for receipt in self.active_receipts()
+                     if receipt.digest in self.authorized_effect_returns)
 
     def is_effect_return_binding(
             self, clause_id: str, receipt_digest: str) -> bool:
@@ -175,6 +191,7 @@ class RuntimeState:
                 kept.append(receipt)
         self.receipts = kept
         self.superseded_receipts.difference_update(roots)
+        self.authorized_effect_returns.difference_update(roots)
         self.effect_return_bindings = {
             (clause_id, receipt_digest)
             for clause_id, receipt_digest in self.effect_return_bindings
@@ -225,6 +242,7 @@ class RuntimeState:
         self.receipts.clear()
         self.clause_receipts.clear()
         self.effect_return_bindings.clear()
+        self.authorized_effect_returns.clear()
         self.superseded_receipts.clear()
         self.bindings.clear()
         self.supporting_clauses.clear()

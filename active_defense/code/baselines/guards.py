@@ -106,13 +106,25 @@ Return only a JSON array with one object per user task instruction. Each object 
         digest = hashlib.sha256(prompt.encode()).hexdigest()
         if digest in self._cache:
             return self._cache[digest]
-        raw = chat(self.client, self.model, prompt, thinking=False, max_tokens=4000)
-        match = re.search(r"\[.*\]", raw, re.S)
-        parsed = json.loads(match.group(0) if match else raw)
-        if not isinstance(parsed, list):
-            raise ValueError("Task Shield response is not a JSON array")
-        self._cache[digest] = parsed
-        return parsed
+        # The published method assumes a well-formed JSON array response.  Some
+        # OpenAI-compatible providers occasionally emit prose or truncated JSON;
+        # retry the identical request a few times before surfacing the error,
+        # rather than scoring a transient format failure as a deny.
+        last_exc: Exception | None = None
+        for _ in range(3):
+            raw = chat(self.client, self.model, prompt, thinking=False, max_tokens=4000)
+            match = re.search(r"\[.*\]", raw, re.S)
+            try:
+                parsed = json.loads(match.group(0) if match else raw)
+            except (json.JSONDecodeError, TypeError) as exc:
+                last_exc = exc
+                continue
+            if not isinstance(parsed, list):
+                last_exc = ValueError("Task Shield response is not a JSON array")
+                continue
+            self._cache[digest] = parsed
+            return parsed
+        raise last_exc or ValueError("Task Shield response is not a JSON array")
 
     def _extract(self, source: str, content: str) -> list[str]:
         rows = self._ask_array(self.EXTRACTION_PROMPT.format(
@@ -142,9 +154,23 @@ Return only a JSON array with one object per user task instruction. Each object 
         return scores
 
     def prepare(self, task: str, tools: list[dict], **context: Any) -> None:
-        self.task_instructions = self._extract("user", task)
-        if not self.task_instructions:
-            raise ValueError("Task Shield extracted an empty user task set")
+        # Extraction of the trusted task set drives every alignment score.  A
+        # transient empty extraction (some providers return []) is retried with
+        # the identical request.  If the model genuinely finds no actionable
+        # instruction, Task Shield has nothing to align against, so every later
+        # tool call scores against an empty task set and is denied -- the
+        # published guard's honest over-block, not a crash.
+        for _ in range(3):
+            self.task_instructions = self._extract("user", task)
+            if self.task_instructions:
+                break
+            self._cache.pop(
+                hashlib.sha256(
+                    self.EXTRACTION_PROMPT.format(source="user", content=task[:30000]).encode()
+                ).hexdigest(),
+                None,
+            )
+        self.empty_task_extraction = not self.task_instructions
         self.events = []
 
     def check(self, tool: str, arguments: dict, **context: Any) -> GuardDecision:

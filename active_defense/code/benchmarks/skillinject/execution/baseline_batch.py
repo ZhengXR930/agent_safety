@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -23,14 +24,20 @@ def main() -> None:
     parser.add_argument("--work-root", required=True)
     parser.add_argument("--baseline", action="append",
                         choices=("undefended", "clawguard", "progent",
-                                 "taskshield"))
+                                 "taskshield", "dynamic_guardian"))
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--injection-limit", type=int, default=0)
     parser.add_argument("--task-limit", type=int, default=0)
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--guard-model", default="gpt-5.5-2026-04-24")
+    parser.add_argument("--artifact-root", default=str(
+        REPO.parent / "benchmarks" / "external" / "defenses-enablers"),
+        help="published defenses-enablers artifact root (dynamic_guardian)")
     parser.add_argument("--judge-model", default="gpt-5.4-2026-03-05")
     parser.add_argument("--case-timeout", type=int, default=900)
+    parser.add_argument(
+        "--pair", action="append", default=[],
+        help="run only an exact idNNN_taskN pair; repeatable")
     args = parser.parse_args()
     if args.workers < 1 or args.case_timeout < 1:
         raise ValueError("workers and case-timeout must be positive")
@@ -48,6 +55,14 @@ def main() -> None:
         if args.task_limit:
             tasks = tasks[:args.task_limit]
         pairs.extend((row, index, task) for index, task in enumerate(tasks))
+    if args.pair:
+        selected = set(args.pair)
+        pairs = [
+            pair for pair in pairs
+            if f"id{int(pair[0]['id']):03d}_task{pair[1]}" in selected
+        ]
+        if not pairs:
+            raise ValueError("no pairs matched --pair filter")
     baselines = args.baseline or ["progent", "taskshield"]
 
     def run_pair(baseline: str, row: dict, index: int, task: dict) -> dict:
@@ -66,17 +81,32 @@ def main() -> None:
                 if destination.is_file():
                     continue
                 sandbox = _sandbox(row, task, root / condition, clean)
-                command = [
-                    "python3", "-m", "code.benchmarks.skillinject.execution.baselines",
-                    "--baseline", baseline, "--sandbox", str(sandbox),
-                    "--task", task["prompt"], "--condition", condition,
-                    "--model", args.model, "--guard-model", args.guard_model,
-                    "--judge-model", args.judge_model,
-                    "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
-                    "--attack-context", json.dumps(
-                        row.get("instructions") or {}, ensure_ascii=False),
-                    "--output", str(destination),
-                ]
+                if baseline == "dynamic_guardian":
+                    command = [
+                        sys.executable, "-m",
+                        "code.benchmarks.skillinject.execution.guardian",
+                        "--sandbox", str(sandbox), "--task", task["prompt"],
+                        "--artifact-root", str(Path(args.artifact_root).resolve()),
+                        "--condition", condition, "--model", args.model,
+                        "--guardian-model", args.guard_model,
+                        "--judge-model", args.judge_model,
+                        "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
+                        "--attack-context", json.dumps(
+                            row.get("instructions") or {}, ensure_ascii=False),
+                        "--output", str(destination),
+                    ]
+                else:
+                    command = [
+                        sys.executable, "-m", "code.benchmarks.skillinject.execution.baselines",
+                        "--baseline", baseline, "--sandbox", str(sandbox),
+                        "--task", task["prompt"], "--condition", condition,
+                        "--model", args.model, "--guard-model", args.guard_model,
+                        "--judge-model", args.judge_model,
+                        "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
+                        "--attack-context", json.dumps(
+                            row.get("instructions") or {}, ensure_ascii=False),
+                        "--output", str(destination),
+                    ]
                 for token in (row.get("task_scripts") or {}):
                     command.extend(["--attack-token", str(token)])
                 _run(command, args.case_timeout)

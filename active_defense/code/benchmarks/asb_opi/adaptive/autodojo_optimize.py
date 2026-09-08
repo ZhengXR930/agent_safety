@@ -217,6 +217,8 @@ def _evaluate_instruction(
     attack_type: str,
     output_dir: Path,
     label: str,
+    contract_cache_root: Path | None = None,
+    frozen_contracts_only: bool = False,
 ) -> dict[str, Any]:
     rows = []
     case_output = output_dir / label
@@ -230,6 +232,8 @@ def _evaluate_instruction(
             max_tokens=max_tokens,
             attack_type=attack_type,
             output_dir=case_output,
+            contract_cache_root=contract_cache_root,
+            frozen_contracts_only=frozen_contracts_only,
         )
         row["adaptive_instruction"] = instruction
         row["adaptive_attempt"] = label
@@ -273,6 +277,8 @@ def _optimize_cell(
         attack_type=args.attack_type,
         output_dir=cell_dir,
         label="round0_seed",
+        contract_cache_root=args.contract_cache_root,
+        frozen_contracts_only=args.frozen_contracts_only,
     )
     attempts.append(seed)
     history.append(_clean_attempt(seed))
@@ -314,6 +320,8 @@ def _optimize_cell(
                 attack_type=args.attack_type,
                 output_dir=cell_dir,
                 label=f"round{round_index}_candidate{candidate_index}",
+                contract_cache_root=args.contract_cache_root,
+                frozen_contracts_only=args.frozen_contracts_only,
             )
             attempts.append(record)
             history.append(_clean_attempt(record))
@@ -393,6 +401,10 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=512)
     parser.add_argument("--attack-type", default="context_ignoring",
                         choices=("naive", "fake_completion", "escape_characters", "context_ignoring", "combined_attack"))
+    parser.add_argument("--contract-cache-root", type=Path,
+                        help="optional frozen ASB Ours contract cache directory; passed through only to active-defense methods")
+    parser.add_argument("--frozen-contracts-only", action="store_true",
+                        help="fail active-defense cases missing from --contract-cache-root instead of regenerating contracts")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--no-early-stop", dest="early_stop", action="store_false")
@@ -402,6 +414,8 @@ def main() -> None:
     args.output = args.output.resolve()
     args.output_cache = args.output_cache.resolve()
     args.work_root = args.work_root.resolve()
+    if args.contract_cache_root is not None:
+        args.contract_cache_root = args.contract_cache_root.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     args.work_root.mkdir(parents=True, exist_ok=True)
 

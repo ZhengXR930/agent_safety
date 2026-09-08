@@ -184,6 +184,16 @@ the frozen contracts contain the required normal tools, and WRAP is not
 overblocking them, but the target agent sometimes stops before calling all
 remaining normal tools.
 
+For CaMeL and MELON, the adaptive prompt mostly changes which cells fail rather
+than uniformly increasing vulnerability.  CaMeL has 22 newly successful attacks
+and 19 original successes removed on the same 400 cells, yielding the small net
+increase from 43/400 to 46/400.  MELON has 15 new successes and 20 removed
+successes, so its adaptive ASR is lower than original (45/400 vs. 50/400).  The
+new successes are mostly payloads rewritten as benign-sounding validation,
+integrity, or prerequisite steps that enter the baseline planner/tool-selection
+path; the lost successes reflect target-model instability and defense filtering
+on different payload phrasings.
+
 ### SkillInject · SkillJect Fusion, 44 Pairs
 
 Artifacts:
@@ -229,19 +239,29 @@ and CapFlow utility semantics.
 
 Artifacts:
 `experiment_results/mcptox/mcp_itp_template2_targetfirst_v5_strong_N5T2m3_full.json`
-and replay files under `experiment_results/mcptox/*_mcp_itp_template2_v5_full455_replay.json`.
+and replay files under `experiment_results/mcptox/*_mcp_itp_template2_v5_full455_replay.json`,
+with corrected offline scorer output at
+`experiment_results/mcptox/mcp_itp_template2_v5_full455_corrected_summary.json`
+and full remote rows retained at
+`experiment_results/mcptox/mcp_itp_template2_v5_full455_corrected_scoring.json`.
 
 | Schema | AU | AU-original | ASR | ASR-original |
 |---|---:|---:|---:|---:|
-| Ours | **357/455 (78.46%)** | **370/455 (81.32%)** | **7/455 (1.54%)** | **0/455 (0.00%)** |
-| Undefended | 140/455 (30.77%) | 167/455 (36.70%) | 245/455 (53.85%) | 145/455 (31.87%) |
-| MCPGuard | 149/455 (32.75%) | 240/455 (52.75%) | 203/455 (44.62%) | 1/455 (0.22%) |
-| ClawGuard | 260/455 (57.14%) | 197/455 (43.30%) | 18/455 (3.96%) | 71/455 (15.60%) |
-| StackOne | 229/455 (50.33%) | 68/455 (14.95%) | 33/455 (7.25%) | 9/455 (1.98%) |
-| Pipelock | 131/455 (28.79%) | 206/455 (45.27%) | 241/455 (52.97%) | 136/455 (29.89%) |
+| Ours | **357/455 (78.46%)** | **370/455 (81.32%)** | **0/455 (0.00%)** | **0/455 (0.00%)** |
+| Undefended | 140/455 (30.77%) | 167/455 (36.70%) | 97/455 (21.32%) | 145/455 (31.87%) |
+| MCPGuard | 149/455 (32.75%) | 240/455 (52.75%) | 69/455 (15.16%) | 1/455 (0.22%) |
+| ClawGuard | 260/455 (57.14%) | 197/455 (43.30%) | 17/455 (3.74%) | 71/455 (15.60%) |
+| StackOne | 229/455 (50.33%) | 68/455 (14.95%) | 5/455 (1.10%) | 9/455 (1.98%) |
+| Pipelock | 131/455 (28.79%) | 206/455 (45.27%) | 99/455 (21.76%) | 136/455 (29.89%) |
 
-This subset contains 381 tool-hijack cases scored by paper-style target-tool
-invocation and 74 cases scored by the MCPTox-compatible adaptive judge.
+This subset contains 381 tool-hijack cases scored by corrected objective-level
+matching and 74 cases scored by the MCPTox-compatible adaptive judge.  The
+legacy target-tool-only score is retained in the corrected artifact for audit.
+ClawGuard's low adaptive ASR is primarily a filtering/abstention tradeoff:
+363/455 attack cases either block a catalog/tool path or yield no effective
+proposal, leaving AU at 260/455.  Under the corrected scorer its residual ASR is
+13/381 on tool-hijack cases and 4/74 on MCPTox-judge cases, so the apparent
+robustness is not free utility-preserving recovery.
 
 ### MSB · MCP-ITP Payload-Aware, 212 Applicable Cases
 
@@ -266,9 +286,10 @@ side-effect success.
 ### Current Interpretation
 
 Across all five applicability subsets, Ours keeps adaptive ASR at 0 or near-zero:
-0/400 on ASB-OPI, 0/44 on SkillInject, 0/150 on SCR CapFlow, 7/455 on MCPTox
-Template-2, and 0/212 on MSB.  The remaining MCPTox 7/455 are the only non-zero
-adaptive failures and should be the next MCP-side error-analysis target.  The SCR
+0/400 on ASB-OPI, 0/44 on SkillInject, 0/150 on SCR CapFlow, 0/455 on MCPTox
+Template-2, and 0/212 on MSB.  The prior MCPTox 7/455 came from a
+target-tool-only scorer that counted legitimate same-tool calls as adaptive
+success.  The SCR
 non-zero failures were contract-generation bugs rather than WRAP policy gaps;
 fixing identity argument closure removed the remaining four ASR without lowering
 AU.  On ASB-OPI, the remaining gap is AU rather than ASR: the current evidence

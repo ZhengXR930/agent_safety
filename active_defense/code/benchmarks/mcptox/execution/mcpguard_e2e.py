@@ -197,6 +197,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--mcptox-replay-rows", type=Path,
                         help="MCP-ITP result JSON whose optimized rows replace attack catalogs")
+    parser.add_argument("--case-id", action="append", default=[])
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
@@ -209,12 +210,16 @@ def main() -> None:
             args.mcptox_replay_rows, args.limit)
     else:
         clean_cases, attack_cases = _cases(args.limit)
-    protocol = protocol_identity()
+    if args.case_id:
+        wanted = set(args.case_id)
+        clean_cases = [c for c in clean_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
+        attack_cases = [c for c in attack_cases if str(c.get("case_id")) in wanted or str(c.get("key")) in wanted]
     # Construct experiment clients before importing MCP-Guard. Its upstream
     # package loads its own .env for optional detectors; those credentials are
     # not the target-model or judge credentials for this benchmark run.
     agent = client_for_model(args.model)
     evaluator = client_for_model(args.evaluation_model)
+    protocol = protocol_identity()
     scanner = MCPGuardScanner(
         output.parent / "mcpguard_scan_cache.json",
         output.parent / "mcpguard_detector.log")

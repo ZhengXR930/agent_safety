@@ -1299,19 +1299,35 @@ def _run_baseline(
     injected: dict,
     args: argparse.Namespace,
 ) -> None:
-    command = [
-        sys.executable, "-m", "code.benchmarks.skillinject.execution.baselines",
-        "--baseline", baseline,
-        "--sandbox", str(sandbox),
-        "--task", task["prompt"],
-        "--condition", "attack",
-        "--model", args.model,
-        "--guard-model", args.guard_model,
-        "--judge-model", args.judge_model,
-        "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
-        "--attack-context", _attack_context(row, injected),
-        "--output", str(output),
-    ]
+    if baseline == "dynamic_guardian":
+        command = [
+            sys.executable, "-m",
+            "code.benchmarks.skillinject.execution.guardian",
+            "--sandbox", str(sandbox),
+            "--task", task["prompt"],
+            "--condition", "attack",
+            "--model", args.model,
+            "--guardian-model", args.guard_model,
+            "--judge-model", args.judge_model,
+            "--artifact-root", str(Path(args.artifact_root).resolve()),
+            "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
+            "--attack-context", _attack_context(row, injected),
+            "--output", str(output),
+        ]
+    else:
+        command = [
+            sys.executable, "-m", "code.benchmarks.skillinject.execution.baselines",
+            "--baseline", baseline,
+            "--sandbox", str(sandbox),
+            "--task", task["prompt"],
+            "--condition", "attack",
+            "--model", args.model,
+            "--guard-model", args.guard_model,
+            "--judge-model", args.judge_model,
+            "--attack-judge-prompt", str(row.get("judge_prompt") or ""),
+            "--attack-context", _attack_context(row, injected),
+            "--output", str(output),
+        ]
     for token in _attack_tokens(row, injected):
         command.extend(["--attack-token", str(token)])
     _run(command, args.case_timeout)
@@ -1407,7 +1423,7 @@ def main() -> None:
                         help=f"exact idNNN_taskN pair; defaults to {DEFAULT_PAIR}")
     parser.add_argument("--method", action="append",
                         choices=("undefended", "clawguard", "progent",
-                                 "taskshield", "ours"),
+                                 "taskshield", "dynamic_guardian", "ours"),
                         help="method(s) to run; default: undefended and ours")
     parser.add_argument("--injection-mode", choices=("template", "fusion"),
                         default="template")
@@ -1427,6 +1443,10 @@ def main() -> None:
     parser.add_argument("--guard-model", default="deepseek-v4-flash")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
     parser.add_argument("--judge-model", default="gpt-5.4-2026-03-05")
+    parser.add_argument(
+        "--artifact-root", default=str(
+            REPO.parent / "benchmarks" / "external" / "defenses-enablers"),
+        help="published defenses-enablers artifact root for dynamic_guardian")
     parser.add_argument(
         "--contract-root", default="",
         help="directory of frozen reviewed Contracts for ours; one idNNN_taskK.json per pair")

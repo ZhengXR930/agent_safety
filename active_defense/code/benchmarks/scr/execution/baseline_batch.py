@@ -68,18 +68,31 @@ def main() -> None:
         capflow_baselines = tuple(
             item for item in capflow_baselines
             if item in {"undefended", "clawguard", "clawguard_approval3",
-                        "progent", "taskshield"})
+                        "progent", "taskshield", "dynamic_guardian"})
         for baseline in capflow_baselines:
             for case_id in case_ids:
                 output = root / "capflow" / baseline / f"case{case_id:03d}.json"
-                command = [
-                    sys.executable, "-m", "code.benchmarks.scr.execution.baselines",
-                    "--baseline", baseline, "--scr-root", str(scr_root),
-                    "--manifest-file", str(Path(args.manifest_file).resolve()),
-                    "--case", str(case_id), "--condition", "B_only",
-                    "--condition", "A+B_neutral", "--model", args.model,
-                    "--guard-model", args.guard_model, "--output", str(output),
-                ]
+                if baseline == "dynamic_guardian":
+                    command = [
+                        sys.executable, "-m",
+                        "code.benchmarks.scr.execution.guardian_capflow",
+                        "--scr-root", str(scr_root), "--artifact-root",
+                        str(Path(args.guardian_artifact).resolve()),
+                        "--manifest-file", str(Path(args.manifest_file).resolve()),
+                        "--case", str(case_id), "--condition", "B_only",
+                        "--condition", "A+B_neutral", "--model", args.model,
+                        "--guardian-model", args.guard_model,
+                        "--output", str(output),
+                    ]
+                else:
+                    command = [
+                        sys.executable, "-m", "code.benchmarks.scr.execution.baselines",
+                        "--baseline", baseline, "--scr-root", str(scr_root),
+                        "--manifest-file", str(Path(args.manifest_file).resolve()),
+                        "--case", str(case_id), "--condition", "B_only",
+                        "--condition", "A+B_neutral", "--model", args.model,
+                        "--guard-model", args.guard_model, "--output", str(output),
+                    ]
                 if args.fusion_dataset:
                     command.extend(["--fusion-dataset", args.fusion_dataset])
                 jobs.append(("capflow", baseline, command, output))
@@ -137,17 +150,28 @@ def main() -> None:
         trustlift_baselines = tuple(
             item for item in trustlift_baselines
             if item in {"undefended", "clawguard", "clawguard_approval3",
-                        "progent", "taskshield"})
+                        "progent", "taskshield", "dynamic_guardian"})
         for baseline in trustlift_baselines:
             for name in names:
                 output = root / "trustlift" / baseline / f"{name}.json"
-                command = [
-                    sys.executable, "-m", "code.benchmarks.scr.execution.clawguard",
-                    "--scr-root", str(scr_root), "--suite", "trustlift",
-                    "--baseline", baseline, "--trustlift-case", name,
-                    "--model", args.model, "--guard-model", args.guard_model,
-                    "--output", str(output),
-                ]
+                if baseline == "dynamic_guardian":
+                    command = [
+                        sys.executable, "-m",
+                        "code.benchmarks.scr.execution.guardian_trustlift",
+                        "--scr-root", str(scr_root), "--artifact-root",
+                        str(Path(args.guardian_artifact).resolve()),
+                        "--trustlift-case", name, "--model", args.model,
+                        "--guardian-model", args.guard_model,
+                        "--output", str(output),
+                    ]
+                else:
+                    command = [
+                        sys.executable, "-m", "code.benchmarks.scr.execution.clawguard",
+                        "--scr-root", str(scr_root), "--suite", "trustlift",
+                        "--baseline", baseline, "--trustlift-case", name,
+                        "--model", args.model, "--guard-model", args.guard_model,
+                        "--output", str(output),
+                    ]
                 if args.fusion_dataset:
                     command.extend(["--fusion-dataset", args.fusion_dataset])
                 jobs.append(("trustlift", baseline, command, output))

@@ -87,6 +87,11 @@ async def _one(msb: Path, item: dict, model: str, defense: str,
     from internal_client import AZURE_ENDPOINT, MODEL_REGISTRY, read_config_key
 
     _load_key()
+    try:
+        from code.core.client import langchain_usage_callback
+        _usage_cb = langchain_usage_callback(model)
+    except Exception:
+        _usage_cb = None
     config = json.loads((msb / "data/tools/normal_tools" /
                          f"{item['tool']}.json").read_text())
     client = MCPClient.from_dict(config)
@@ -107,6 +112,11 @@ async def _one(msb: Path, item: dict, model: str, defense: str,
         )
     else:
         llm = ChatDeepSeek(model=model, max_retries=2)
+    if _usage_cb is not None:
+        try:
+            llm.callbacks = [_usage_cb]
+        except Exception:
+            pass
     agent = MCPAgent(
         llm=llm, client=client,
         system_prompt_template=item["system_prompt"] + SYSTEM_PROMPT_TEMPLATE,

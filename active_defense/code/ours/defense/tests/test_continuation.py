@@ -519,7 +519,8 @@ class SanitizedReplanTests(unittest.TestCase):
                     "recipient": "Alice", "body": "hello"},
                 "unresolved_arguments": [],
             }],
-            "evidence": [], "denied_resources": ["injected_tool"],
+            "evidence": [], "reused_observations": [],
+            "denied_resources": ["injected_tool"],
             "attempted_effects": [],
             "verified_effects": [],
         }

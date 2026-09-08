@@ -275,6 +275,13 @@ def _candidate_rows(state, contract, target_ref, expected_type):
               if clause.output_ref}
     target = by_ref.get(str(target_ref))
     if isinstance(target, DeriveClause):
+        # A WRAP-authorized Effect return is an authorized fact of this episode.
+        # Exposing its committed nodes lets a later Effect argument that reuses
+        # an authorized product (for example running the exact artifact a prior
+        # authorized write created) trace to real provenance instead of a
+        # re-grounded semantic judgment. Exact projection downstream still needs
+        # a unique byte-exact match, so this adds evidence, never a guess.
+        rows.extend(_authorized_effect_rows(state))
         resolver = LazyResolver(state, contract)
         for source in target.input_refs:
             if source in {"task", "runtime-context"}:
@@ -372,6 +379,27 @@ _CONFLICT = object()
 _PUBLIC_GOAL_BUDGET = 8_000
 
 
+def _authorized_effect_rows(state):
+    """Candidate rows from Receipts a prior Effect return was WRAP-authorized.
+
+    A WRAP-authorized Effect return is an authorized fact of this episode: its
+    committed arguments and return value may deterministically ground a later
+    Effect argument (for example running the exact artifact an authorized write
+    just created). Only the committed nodes are exposed, and downstream exact
+    projection still requires a unique byte-exact match — no semantic guess.
+    """
+    rows = []
+    for receipt in state.authorized_effect_receipts():
+        root = receipt.digest + "#"
+        for value, ref in _nodes(receipt.value, root):
+            rows.append({"ref": ref, "value": value})
+        if receipt.arguments:
+            for value, ref in _nodes(
+                    receipt.arguments, receipt.digest + "#/$arguments"):
+                rows.append({"ref": ref, "value": value})
+    return rows
+
+
 def compile_goals(state: RuntimeState, contract, action, arguments, surface,
                   equal):
     resolver = LazyResolver(state, contract)
@@ -418,6 +446,19 @@ def compile_goals(state: RuntimeState, contract, action, arguments, surface,
                 target = (immediate_delegated
                           if spec.get("delegated") is True else immediate)
                 target[(effect.id, name)] = projected
+                continue
+
+            # A WRAP-authorized Effect return is an authorized fact of this
+            # episode. When the proposed argument reuses one of its committed
+            # values (for example running the exact artifact a prior authorized
+            # write created), close it deterministically here — no re-grounding,
+            # no Binding Agent — provided the byte-exact match is unique.
+            authorized = _project_closed_member(
+                arguments[name], _authorized_effect_rows(state))
+            if authorized:
+                target = (immediate_delegated
+                          if spec.get("delegated") is True else immediate)
+                target[(effect.id, name)] = authorized
                 continue
 
             leaves = {}

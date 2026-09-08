@@ -55,7 +55,7 @@ from code.benchmarks.msb.execution.attack import (  # noqa: E402
     prepare as _prepare_attack,
     response as _response_attack,
 )
-from code.core.client import read_config_key  # noqa: E402
+from code.core.client import langchain_usage_callback, read_config_key  # noqa: E402
 from code.ours.defense.broker import UnitBroker  # noqa: E402
 
 
@@ -404,7 +404,8 @@ async def _native_row(row: dict, frozen: dict, model: str,
                 "{tool_descriptions}",
                 "{tool_descriptions}\n" + prompt_injection)
         agent = MCPAgent(
-            llm=ChatDeepSeek(model=model, max_retries=2),
+            llm=ChatDeepSeek(model=model, max_retries=2,
+                             callbacks=[cb] if (cb := langchain_usage_callback(model)) else None),
             client=client, max_steps=10, memory_enabled=False,
             system_prompt_template=system_template,
             disallowed_tools=_disallowed_tools(row))

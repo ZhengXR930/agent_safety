@@ -8,17 +8,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 
 from code.ours.defense.contract import AcquireClause, EffectClause
 from code.ours.defense.resolver import LazyResolver
 from code.ours.defense.state import (CONTEXT_REF, GROUNDED_REF, QUERY_REF,
-                                     SEMANTIC_REF, RuntimeState, digest)
+                                     SEMANTIC_REF, RuntimeState, digest, stable)
 
 
 REPAIR = "repair"
 REPLAN = "replan"
 ABORT = "abort"
-RECOVERY_ENVELOPE_SCHEMA = "active-defense-recovery-v3"
+RECOVERY_ENVELOPE_SCHEMA = "active-defense-recovery-v4"
 
 
 class ReplanRequired(RuntimeError):
@@ -53,6 +54,7 @@ class RecoveryEnvelope:
     required_acquires: tuple[dict, ...] = ()
     remaining_effects: tuple[dict, ...] = ()
     evidence: tuple[dict, ...] = ()
+    reused_observations: tuple[dict, ...] = ()
     denied_resources: tuple[str, ...] = ()
     attempted_effects: tuple[dict, ...] = ()
     verified_effects: tuple[dict, ...] = ()
@@ -66,6 +68,8 @@ class RecoveryEnvelope:
             "remaining_effects": [dict(item)
                                   for item in self.remaining_effects],
             "evidence": [dict(item) for item in self.evidence],
+            "reused_observations": [dict(item)
+                                    for item in self.reused_observations],
             "denied_resources": list(self.denied_resources),
             "attempted_effects": [dict(item)
                                   for item in self.attempted_effects],
@@ -78,8 +82,8 @@ def render_recovery_task(task: str, envelope: dict) -> str:
     """Render one shared Tool/MCP/Skill recovery protocol."""
     fields = {
         "schema", "trusted_task", "required_acquires",
-        "remaining_effects", "evidence", "denied_resources",
-        "attempted_effects", "verified_effects",
+        "remaining_effects", "evidence", "reused_observations",
+        "denied_resources", "attempted_effects", "verified_effects",
     }
     if (not isinstance(envelope, dict) or set(envelope) != fields or
             envelope.get("schema") != RECOVERY_ENVELOPE_SCHEMA):
@@ -91,7 +95,10 @@ def render_recovery_task(task: str, envelope: dict) -> str:
         "\nExecute only the listed required_acquires needed for a "
         "remaining_effect, then complete that remaining_effect. Reuse every "
         "bound_argument exactly. Resolve unresolved_arguments only from the "
-        "trusted task and listed evidence. attempted_effects are diagnostic "
+        "trusted task and listed evidence. reused_observations are prior "
+        "read-only results already returned to you verbatim; treat them as "
+        "known context and do not re-read those sources. attempted_effects "
+        "are diagnostic "
         "only and do not prove task completion; use their summaries only to "
         "avoid repeating failed work. Do not repeat verified_effects; use "
         "their summaries as already accepted progress. Do not use "
@@ -629,6 +636,36 @@ class ContinuationController:
         """Freeze the exact PLANT-decorated view previously shown to Agent."""
         self._receipt_views[str(receipt.digest)] = value
 
+    def _reusable_observations(self, state: RuntimeState,
+                               already: set[str]) -> list:
+        """Prior read-only observations a fresh Agent may reuse verbatim.
+
+        These are supplementary context, never effect authority: an entry
+        qualifies only if it is a non-Effect observation, its frozen view is
+        byte-identical to the raw return (no PLANT marker or injected span was
+        placed on it), its source is not denied, and it survives invalidation.
+        Reusing them lets recovery skip re-reading files it already read, while
+        the value carried is exactly what the Agent was already shown.
+        """
+        effect_actions = {clause.action for clause in self.contract.clauses
+                          if isinstance(clause, EffectClause)}
+        reusable = []
+        if os.environ.get("APEX_DISABLE_OBS_REUSE"):
+            return reusable
+        for receipt in state.active_receipts():
+            root = receipt.digest
+            if root in already or root not in self._receipt_views:
+                continue
+            if receipt.effect_return or receipt.capability in effect_actions:
+                continue
+            if receipt.capability in self.denied_resources:
+                continue
+            view = self._receipt_views[root]
+            if stable(view) != stable(receipt.value):
+                continue
+            reusable.append(receipt)
+        return reusable
+
     def _receipt_roots(self, state: RuntimeState, sources) -> set[str]:
         """Project internal Clause sources to their concrete Receipt roots."""
         clauses = {
@@ -921,6 +958,8 @@ class ContinuationController:
         evidence_ids = {
             receipt.digest + "#": "E" + str(index)
             for index, receipt in enumerate(receipts)}
+        reused = self._reusable_observations(
+            state, {receipt.digest for receipt in receipts})
         return RecoveryEnvelope(
             trusted_task=self.contract.task,
             required_acquires=self._required_acquires(
@@ -932,6 +971,11 @@ class ContinuationController:
                  "capability": receipt.capability,
                  "value": self._receipt_views[receipt.digest]}
                 for receipt in receipts),
+            reused_observations=tuple(
+                {"capability": receipt.capability,
+                 "arguments": dict(receipt.arguments),
+                 "value": self._receipt_views[receipt.digest]}
+                for receipt in reused),
             denied_resources=tuple(sorted(self.denied_resources)),
             attempted_effects=tuple(
                 self._effect_summary(item, verified=False)
