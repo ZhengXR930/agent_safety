@@ -1,9 +1,9 @@
 """Main-experiment bar charts (BU / AU / ASR) from Discussion.md Thread #9.
 
-Two figures, each three side-by-side panels (BU, AU, ASR):
+Three figures, each following the same row-by-benchmark layout:
   * ``main_bars_tool``  -- Tool surface (AgentDojo, ASB-OPI).
-  * ``main_bars_mcp_skill`` -- MCP (MCPTox, MSB) and Skill (SkillInject, SCR),
-    separated by a vertical dashed divider.
+  * ``main_bars_mcp`` -- MCP surface (MCPTox, MSB).
+  * ``main_bars_skill`` -- Skill surface (SkillInject, SCR).
 Each benchmark cluster shows one bar per defense that reports that metric.
 Muted (Morandi) palette, shared per-figure legend, two-column paper width.
 """
@@ -22,7 +22,7 @@ from matplotlib.patches import Patch
 # back to DejaVu Serif.
 SERIF = ["STIXGeneral", "Times New Roman", "Times", "DejaVu Serif"]
 
-# Shared font sizes so main_bars_tool and main_bars_mcp_skill are consistent.
+# Shared font sizes so the three main bar figures are consistent.
 FS_TITLE = 12.0
 FS_VALUE = 6.8
 FS_YTICK = 8.5
@@ -286,6 +286,15 @@ def render_grid(benches: list[str], stem: str, width: float, row_h: float) -> No
             ax = axes[ri][ci]
             schemas = [s for s in SCHEMA_ORDER if s in DATA[bench]
                        and DATA[bench][s][midx] is not None]
+            if not schemas:
+                ax.text(
+                    0.5, 0.5, "N/A",
+                    transform=ax.transAxes,
+                    ha="center", va="center",
+                    fontsize=FS_TITLE,
+                    color="#666",
+                    zorder=4,
+                )
             for xi, s in enumerate(schemas):
                 if s not in used_schemas:
                     used_schemas.append(s)
@@ -484,9 +493,15 @@ def main() -> None:
         width=11.0,
         row_h=1.35,
     )
-    render_surface_grid(
-        [("MCP", ["MCPTox", "MSB"]), ("Skill", ["SkillInject", "SCR"])],
-        "main_bars_mcp_skill",
+    render_grid(
+        ["MCPTox", "MSB"],
+        "main_bars_mcp",
+        width=11.0,
+        row_h=1.35,
+    )
+    render_grid(
+        ["SkillInject", "SCR"],
+        "main_bars_skill",
         width=11.0,
         row_h=1.35,
     )
