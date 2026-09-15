@@ -60,8 +60,9 @@ TOOLS = [
                          "path": {"type": "string", "x-task-derived": True},
                          "argv": {"type": "array",
                                   "items": {"type": "string"},
+                                  "default": [],
                                   "x-task-derived": True}},
-                     "required": ["path", "argv"],
+                     "required": ["path"],
                      "additionalProperties": False}},
 ]
 
@@ -247,8 +248,9 @@ def generate_catalog(trusted_root, *, skill_names=None) -> dict:
                     "type": "object",
                     "properties": {"argv": {
                         "type": "array", "items": {"type": "string"},
+                        "default": [],
                         "x-task-derived": True}},
-                    "required": ["argv"], "additionalProperties": False,
+                    "required": [], "additionalProperties": False,
                 },
                 "implementation": {
                     "kind": "skill_helper",

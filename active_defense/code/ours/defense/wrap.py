@@ -85,9 +85,26 @@ def _atom_authorized(state, contract, atom: str) -> bool:
 
 
 def _trace_argument(state: RuntimeState, spec, value, equal,
-                    delegated_refs=(), semantic_refs=(),
+                    delegated_refs=(), exact_refs=(), grounded_refs=(),
+                    semantic_refs=(),
                     allow_semantic=False, exact_only=False):
-    """Return the exact proof refs for one Contract argument specification."""
+    """Return deterministic proof refs for one Effect argument.
+
+    Semantic/model grounding may help the Binding Agent choose candidate
+    evidence, but it is not an authorization proof at the Effect boundary.
+    Every committed argument must reduce to trusted literals, exact receipt
+    projection, closed deterministic replay, or an already committed Effect.
+    """
+    del grounded_refs, semantic_refs, allow_semantic
+
+    def deterministic(refs):
+        refs = tuple(dict.fromkeys(map(str, refs or ())))
+        if not refs:
+            return ()
+        if {SEMANTIC_REF, GROUNDED_REF}.intersection(refs):
+            return ()
+        return refs
+
     if isinstance(spec, dict) and set(spec) == {"literal"}:
         return (equal(spec["literal"], value), (QUERY_REF,))
     if isinstance(spec, dict) and set(spec) == {"from"}:
@@ -97,29 +114,17 @@ def _trace_argument(state: RuntimeState, spec, value, equal,
             resolved = state.output(source)
             if resolved is not UNRESOLVED and equal(resolved, value):
                 binding = state.bindings.get(str(source).partition(".")[0])
-                if exact_only:
-                    trusted_refs = {QUERY_REF, CONTEXT_REF}
-                    if binding is None:
-                        continue
-                    if (binding.kind not in
-                            {"conditional", "supporting-conditional"} and
-                            not set(map(str, binding.refs)).issubset(
-                                trusted_refs)):
-                        continue
-                if (binding is not None and
-                        SEMANTIC_REF in binding.refs and not allow_semantic):
-                    continue
-                return (True, binding.refs if binding is not None else ())
-        refs = tuple(dict.fromkeys(map(str, semantic_refs or ())))
-        if exact_only:
-            return (False, ())
-        if refs and (allow_semantic or SEMANTIC_REF not in refs):
-            return (True, refs)
+                refs = deterministic(() if binding is None else binding.refs)
+                if refs:
+                    return True, refs
+        refs = deterministic(exact_refs)
+        if refs:
+            return True, refs
         return (False, ())
     if (isinstance(spec, dict) and
             set(spec) == {"from", "delegated"} and
             spec.get("delegated") is True):
-        refs = tuple(dict.fromkeys(map(str, delegated_refs or ())))
+        refs = deterministic(delegated_refs)
         if exact_only:
             return (False, ())
         return (bool(refs), refs)
@@ -128,13 +133,18 @@ def _trace_argument(state: RuntimeState, spec, value, equal,
 
 def _check_clause(state: RuntimeState, contract, clause: EffectClause,
                   arguments: dict, required, content, content_atoms,
-                  delegated_proofs, semantic_proofs, defaults,
+                  delegated_proofs, exact_proofs, grounded_proofs,
+                  semantic_proofs, defaults,
                   equal, exact_only) -> Verdict:
     contracted = frozenset(clause.effect_arguments)
+    # Operator defaults are deterministic runtime behavior, not agent-provided
+    # authority.  If a supplied/materialized argument exactly equals the
+    # trusted schema default, it closes without a semantic Binding even when a
+    # conservative Contract also names the parameter.  Non-default values still
+    # require the normal Contract/Binding proof below.
     defaulted = frozenset(
         name for name, value in arguments.items()
-        if name not in contracted and name in defaults and
-        equal(name, defaults[name], value))
+        if name in defaults and equal(name, defaults[name], value))
     extra = next((name for name in arguments
                   if name not in contracted and name not in defaulted), None)
     if extra is not None:
@@ -155,14 +165,15 @@ def _check_clause(state: RuntimeState, contract, clause: EffectClause,
             state, clause.effect_arguments.get(name), value,
             lambda left, right: equal(name, left, right),
             delegated_proofs.get((clause.id, name), ()),
+            exact_proofs.get((clause.id, name), ()),
+            grounded_proofs.get((clause.id, name), ()),
             semantic_proofs.get((clause.id, name), ()),
             name in content,
             name in exact_only)
         if not ok:
             return Verdict(False, f"untraceable-arg:{name}")
-        if (name in exact_only and
-                any(str(ref) in {SEMANTIC_REF, GROUNDED_REF}
-                    for ref in proof_refs)):
+        if any(str(ref) in {SEMANTIC_REF, GROUNDED_REF}
+               for ref in proof_refs):
             return Verdict(False, f"untraceable-arg:{name}")
         refs.extend(proof_refs)
 
@@ -187,12 +198,15 @@ def _check_clause(state: RuntimeState, contract, clause: EffectClause,
 def check_effect(state: RuntimeState, contract, action: str, arguments: dict,
                  *, required=frozenset(), content=frozenset(),
                  content_atoms=None, delegated_proofs=None,
+                 exact_proofs=None, grounded_proofs=None,
                  semantic_proofs=None, defaults=None,
                  exact_only=None, equal=None) -> Verdict:
     """PASS iff one Root Effect Clause closes every supplied argument."""
     action, arguments = str(action), dict(arguments or {})
     content_atoms = dict(content_atoms or {})
     delegated_proofs = dict(delegated_proofs or {})
+    exact_proofs = dict(exact_proofs or {})
+    grounded_proofs = dict(grounded_proofs or {})
     semantic_proofs = dict(semantic_proofs or {})
     defaults = dict(defaults or {})
     exact_only = frozenset(map(str, exact_only or ()))
@@ -206,7 +220,8 @@ def check_effect(state: RuntimeState, contract, action: str, arguments: dict,
         verdict = _check_clause(
             state, contract, clause, arguments, frozenset(required),
             frozenset(content), content_atoms, delegated_proofs,
-            semantic_proofs, defaults, equal, exact_only)
+            exact_proofs, grounded_proofs, semantic_proofs,
+            defaults, equal, exact_only)
         if verdict.ok:
             return verdict
         first_failure = first_failure or verdict

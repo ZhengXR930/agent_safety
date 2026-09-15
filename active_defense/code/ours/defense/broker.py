@@ -76,6 +76,7 @@ class UnitBroker:
         self._decisions: list[InvocationDecision] = []
         self._commits: list[CommitReceipt] = []
         self._actions: dict[str, str] = {}
+        self._effect_clause_ids: dict[str, str] = {}
 
     @classmethod
     def _materialize_defaults(cls, value, schema):
@@ -249,6 +250,7 @@ class UnitBroker:
                 identities=tuple(dict.fromkeys(
                     (*tuple(identities or ()), *carrier_identities))))
         self._invocations.append(invocation)
+        self._effect_clause_ids[invocation.id] = decision.effect_clause_id
         self._decisions.append(InvocationDecision(
             invocation.id, decision.route, decision.reason))
         return PreparedInvocation(invocation, decision)
@@ -270,6 +272,8 @@ class UnitBroker:
                 raise ValueError("arguments refer to an unknown invocation")
         row = InvocationDecision(
             prepared.invocation.id, decision.route, decision.reason)
+        self._effect_clause_ids[prepared.invocation.id] = (
+            decision.effect_clause_id)
         for index, existing in enumerate(self._decisions):
             if existing.invocation_id == prepared.invocation.id:
                 self._decisions[index] = row
@@ -309,7 +313,9 @@ class UnitBroker:
         registration = self.registrations.get(action, {})
         if bool(registration.get("effect")):
             self.episode.effect_succeeded(
-                action, arguments)
+                action, arguments, invocation_id=prepared.invocation.id,
+                clause_id=self._effect_clause_ids.get(
+                    prepared.invocation.id, ""))
         self._commits.append(CommitReceipt(prepared.invocation.id))
 
     def invocation_receipts(self) -> dict:

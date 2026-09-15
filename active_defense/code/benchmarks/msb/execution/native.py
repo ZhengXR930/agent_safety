@@ -18,6 +18,7 @@ import shutil
 import site
 import sys
 import traceback
+import threading
 
 # The frozen MSB environment carries the benchmark's LangChain/mcp-use stack,
 # while defender roles use the repository's current OpenAI Agents SDK.  Keep
@@ -29,21 +30,30 @@ sys.path.insert(0, _USER_SITE)
 import openai as _openai  # noqa: F401,E402
 sys.path.remove(_USER_SITE)
 
+# langchain-deepseek may be installed in user-site on the devbox, while the
+# benchmark mcp-use stack should stay on the environment MCP SDK.  Temporarily
+# expose user-site only for the DeepSeek chat wrapper, then remove it again
+# before importing mcp/mcp_use.
+sys.path.insert(0, _USER_SITE)
 from langchain_deepseek import ChatDeepSeek  # noqa: E402
 from mcp.types import CallToolResult, TextContent  # noqa: E402
 from mcp_use import MCPAgent, MCPClient  # noqa: E402
+sys.path.remove(_USER_SITE)
 
 sys.path.insert(0, _USER_SITE)
 import agents as _agents  # noqa: F401,E402
 sys.path.remove(_USER_SITE)
 
 from code.benchmarks.mcp_common.runtime import (  # noqa: E402
+    _canonicalize_nested_arguments,
     _continue,
     _decision_row,
     _msb_cases,
     _msb_contract_key,
     _msb_setup,
     _msb_utility_passed,
+    _omit_optional_null_arguments,
+    _omit_uncontracted_optional,
     _place_catalog,
     _record_operator_success,
     _summary,
@@ -67,6 +77,8 @@ SUPPORT_TOOLS = MSB_ROOT / "data/tools/support_tools"
 ATTACK_TOOLS = MSB_ROOT / "data/tools/attack_tools"
 NODE_BIN = (AGENT_SAFETY / "benchmarks/external/defender/.runtime/"
             "node-v22.17.0-linux-x64/bin")
+_PLACE_CATALOG_LOCK = threading.Lock()
+
 PUA_UNDEFINED = {
     "false_error", "simulated_user",
     "prompt_injection-simulated_user", "prompt_injection-false_error",
@@ -296,9 +308,9 @@ def _raw_tools(client: MCPClient, row: dict, mapping: dict,
 
 async def _native_row(row: dict, frozen: dict, model: str,
                       contract_model: str, attacked: bool,
-                      ablation_mode: str = "full") -> dict:
+                      plant_cache=None) -> dict:
     shared = _msb_setup(
-        contract_model, row, frozen, ablation_mode=ablation_mode)
+        contract_model, row, frozen, plant_cache=plant_cache)
     engine, contract = shared["engine"], shared["contract"]
     registrations, mapping = shared["registrations"], shared["mapping"]
     attack_context = _prepare_attack(row, model) if attacked else None
@@ -317,11 +329,19 @@ async def _native_row(row: dict, frozen: dict, model: str,
     response = ""
     official_effect = None
     try:
+        print(json.dumps({"phase": "create_sessions_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
         await client.create_all_sessions()
+        print(json.dumps({"phase": "create_sessions_end", "case_id": row["case_id"], "attacked": attacked}), flush=True)
+        print(json.dumps({"phase": "raw_tools_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
         actual, bindings = _raw_tools(
             client, row, mapping, session_roles, engine.plan)
-        shown, _basis, proposals = _place_catalog(
-            episode, row["agent"], actual)
+        print(json.dumps({"phase": "raw_tools_end", "case_id": row["case_id"], "attacked": attacked, "tools": len(actual)}), flush=True)
+        print(json.dumps({"phase": "place_catalog_wait", "case_id": row["case_id"], "attacked": attacked}), flush=True)
+        with _PLACE_CATALOG_LOCK:
+            print(json.dumps({"phase": "place_catalog_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
+            shown, _basis, proposals = _place_catalog(
+                episode, row["agent"], actual)
+            print(json.dumps({"phase": "place_catalog_end", "case_id": row["case_id"], "attacked": attacked, "shown": len(shown), "plant_cache_hits": getattr(episode.plant, "cache_hits", None), "plant_placement_calls": getattr(episode.plant, "placement_calls", None)}), flush=True)
         shown_by_name = {tool["name"]: tool["description"] for tool in shown}
         prompt_injection = ""
         if attacked and "prompt_injection" in row["attack_type"]:
@@ -350,6 +370,12 @@ async def _native_row(row: dict, frozen: dict, model: str,
                 original_name = binding["original"]
                 capability = binding["capability"]
                 surface = engine.plan.capabilities.get(capability)
+                arguments, nested = _canonicalize_nested_arguments(
+                    surface, arguments)
+                arguments, dropped = _omit_uncontracted_optional(
+                    contract, surface, capability, arguments)
+                arguments, dropped_null = _omit_optional_null_arguments(
+                    surface, arguments)
                 prepared = broker.prepare(capability, arguments)
                 arguments = dict(prepared.invocation.arguments)
                 decision = prepared.decision
@@ -358,8 +384,18 @@ async def _native_row(row: dict, frozen: dict, model: str,
                 authorized = broker.canonical_arguments(
                     capability, authorized)
                 broker.record_decision(prepared, decision, authorized)
-                decisions.append(_decision_row(
-                    original_name, authorized, (), decision))
+                row_decision = _decision_row(
+                    original_name, authorized, (), decision)
+                adapter = {}
+                if nested:
+                    adapter["nested_arguments"] = list(nested)
+                if dropped:
+                    adapter["dropped_optional_arguments"] = list(dropped)
+                if dropped_null:
+                    adapter["dropped_null_arguments"] = list(dropped_null)
+                if adapter:
+                    row_decision["adapter"] = adapter
+                decisions.append(row_decision)
                 if decision.route != "pass":
                     return _tool_result({
                         "status": "not_executed",
@@ -404,18 +440,28 @@ async def _native_row(row: dict, frozen: dict, model: str,
                 "{tool_descriptions}",
                 "{tool_descriptions}\n" + prompt_injection)
         agent = MCPAgent(
-            llm=ChatDeepSeek(model=model, max_retries=2,
+            llm=ChatDeepSeek(model=model, max_retries=2, timeout=120,
                              callbacks=[cb] if (cb := langchain_usage_callback(model)) else None),
             client=client, max_steps=10, memory_enabled=False,
             system_prompt_template=system_template,
             disallowed_tools=_disallowed_tools(row))
+        # LangGraph counts both agent and tool nodes; MSB native tasks can hit
+        # the default max_steps*2 graph recursion limit before MCPAgent's own
+        # step budget has a chance to stop cleanly. This does not expand the
+        # task policy or defense contract; it only prevents technical aborts in
+        # the benchmark harness.
+        agent.recursion_limit = max(getattr(agent, "recursion_limit", 0), 60)
+        print(json.dumps({"phase": "agent_run_begin", "case_id": row["case_id"], "attacked": attacked, "recursion_limit": getattr(agent, "recursion_limit", None)}), flush=True)
         response = await agent.run(row["task"], max_steps=10)
+        print(json.dumps({"phase": "agent_run_end", "case_id": row["case_id"], "attacked": attacked}), flush=True)
         response_decision = episode.response(response)
         decisions.append(_decision_row(
             "$response", {"value": response}, (), response_decision))
     finally:
         try:
+            print(json.dumps({"phase": "close_client_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
             await _close_client(client)
+            print(json.dumps({"phase": "close_client_end", "case_id": row["case_id"], "attacked": attacked}), flush=True)
         except BaseException as exc:
             print(json.dumps({"cleanup_warning": repr(exc)}), flush=True)
         if attack_context:
@@ -447,11 +493,11 @@ async def _native_row(row: dict, frozen: dict, model: str,
 
 def _native_case(row, frozen, model: str, contract_model: str,
                  modes: tuple[bool, ...],
-                 ablation_mode: str = "full") -> list[dict]:
+                 plant_cache=None) -> list[dict]:
     async def run():
         return [await _native_row(
             row, frozen, model, contract_model, attacked,
-            ablation_mode=ablation_mode)
+            plant_cache=plant_cache)
                 for attacked in modes]
     return asyncio.run(run())
 
@@ -469,9 +515,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--contract-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--mode", choices=("pair", "clean", "attack"),
                         default="pair")
@@ -481,6 +524,8 @@ def main() -> None:
     parser.add_argument("--rerun-failures-from", type=Path)
     parser.add_argument("--case-id", action="append",
                         help="run only this exact frozen case id; repeatable")
+    parser.add_argument("--case-ids-file", type=Path,
+                        help="newline-delimited frozen case ids to run")
     parser.add_argument("--contracts-input", type=Path,
                         help="read-only reviewed Contract catalog to reuse")
     parser.add_argument("--contracts-output", type=Path,
@@ -505,9 +550,13 @@ def main() -> None:
         raise ValueError("MSB native active-defense runs require contracts-input")
     catalog = json.loads(contracts_input.read_text(encoding="utf-8"))
     cases = _msb_cases(args.msb_start, args.msb_limit)
-    if args.case_id:
-        selected = set(args.case_id)
-        cases = [row for row in cases if row["case_id"] in selected]
+    selected_case_ids = set(args.case_id or [])
+    if args.case_ids_file:
+        selected_case_ids.update(
+            line.strip() for line in args.case_ids_file.read_text(encoding="utf-8").splitlines()
+            if line.strip())
+    if selected_case_ids:
+        cases = [row for row in cases if row["case_id"] in selected_case_ids]
     if args.rerun_failures_from:
         selected = _failure_ids(args.rerun_failures_from, required_modes)
         cases = [row for row in cases if row["case_id"] in selected]
@@ -517,7 +566,6 @@ def main() -> None:
         expected = {
             "model": args.model,
             "contract_model": args.contract_model,
-            "ablation_mode": args.ablation_mode,
         }
         if any(previous.get(key) not in (None, value)
                for key, value in expected.items()):
@@ -540,7 +588,6 @@ def main() -> None:
             "schema": "msb-native-defense-v2",
             "model": args.model,
             "contract_model": args.contract_model,
-            "ablation_mode": args.ablation_mode,
             "rows": rows,
             "summary": summary,
         }
@@ -570,11 +617,12 @@ def main() -> None:
             "frozen MSB contracts missing "
             f"{len(missing_contracts)} selected cases; examples: {examples}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    plant_cache = {}
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = {
             pool.submit(_native_case, row, frozen, args.model,
                         args.contract_model, modes,
-                        args.ablation_mode): row["case_id"]
+                        plant_cache): row["case_id"]
             for row, frozen in jobs}
         for future in as_completed(pending):
             case_id = pending[future]

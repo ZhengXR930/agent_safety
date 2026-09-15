@@ -16,6 +16,60 @@ run.py                   the only evaluation entry point
 one concrete adapter.  Baselines do not define adapters; their `runner.py`
 selects how the method consumes a benchmark adapter.
 
+### Runner invariants
+
+- `python3 -m code.run` is the only supported experiment entry point.  Job and
+  efficiency scripts may select cases or manifests, but must not invoke an
+  `execution.*` module directly.
+- Full and subset runs use the same benchmark adapter and method runner.  A
+  subset is expressed only through forwarded suite/manifest/limit arguments.
+- AgentDojo's method-to-module mapping lives only in
+  `benchmarks/agentdojo/execution/registry.py`; `execution/all.py` consumes that
+  registry and does not keep a second mapping.
+- A runner whose historical integration is unavailable must fail before model
+  calls.  It may not silently fall back to another pipeline or provider.
+
+AgentDojo CaMeL and DRIFT are temporarily marked unavailable in the registry.
+Their canonical full artifacts were produced by, respectively, the local
+Progent-compatible CaMeL integration and the AgentDyn DRIFT integration with
+DeepSeek transport normalization.  The former generic `execution/native.py`
+route was not equivalent and has been disabled.  Restore those integrations as
+dedicated execution modules before collecting new subset or efficiency data.
+
+The paper scope is declared once in `core/evaluation_registry.py`: six formal
+benchmarks and thirteen defense baselines. `undefended` is a separate reference
+condition; `mcp_itp` and `skillject` are adaptive attack builders and are not
+counted as defense baselines. Experimental benchmark adapters remain callable
+but are excluded from paper-wide verification unless explicitly requested.
+
+Inspect the complete compatibility matrix or validate every declared adapter
+and command without making model calls:
+
+```bash
+python3 -m code.run --list-matrix
+python3 -m code.run --list-matrix --matrix-format json
+python3 -m code.run --validate-registry
+python3 -m code.run --verify-only
+```
+
+`--validate-registry` checks all six protocol method sets and constructs the
+canonical command for every supported method. Static integration blockers are
+reported separately from method applicability. Environment-specific tools and
+binaries are checked by their own runner before execution.
+
+Matrix cells distinguish `yes`, `blocked`, `validate`, and `missing dep`.
+Currently, AgentDojo CaMeL/DRIFT require integration restoration; MSB MCPGuard
+requires a targeted runtime validation; and MSB/MCPTox Pipelock report a
+missing dependency when neither `PIPELOCK_BIN` nor an installed `pipelock`
+executable is available.
+
+The thirteen paper baselines use one `BaselineRunner` implementation, which
+delegates to the selected benchmark adapter. Historical
+`baselines/<method>/runner.py` files are compatibility shims only; they are not
+an additional routing source. Dedicated runners are reserved for non-paper
+extensions whose interface genuinely differs, such as adaptive payload
+generation.
+
 ## Frozen protocols
 
 | benchmark | clean | attack | attack utility |
@@ -107,6 +161,12 @@ payloads in that directory's `injections.jsonl`.
 `ours/defense/` is the preserved current implementation, including the latest
 Contract/Binding protocol, PLANT carrier replay, WRAP checks, continuation,
 UnitBroker/NestedEffect mediation and identity-preserving placement work.
+
+The unified runner exposes one active-defense method key: `ours`. It maps to
+the current full pipeline across every benchmark adapter, so WRAP, PLANT,
+continuation, UnitBroker mediation and the latest adapter normalization all run
+through the same production path.
+
 Frozen reviewed Contracts live under `ours/contracts/<benchmark>/`; trusted
 method manifests live under `ours/manifests/` and reference benchmark data
 rather than duplicating it.

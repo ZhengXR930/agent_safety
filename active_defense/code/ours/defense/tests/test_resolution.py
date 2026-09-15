@@ -381,6 +381,9 @@ class LazyBindingTests(unittest.TestCase):
             "name": "fetch", "effect": True, "observation": True,
             "effect_return": True, "arguments": ["url"],
             "required_arguments": ["url"],
+            "inputSchema": {"type": "object", "properties": {
+                "url": {"type": "string", "format": "uri",
+                        "x-canonicalization": "url-default-https"}}},
             "argument_types": {"url": "url"}})
 
         calls = []
@@ -393,11 +396,34 @@ class LazyBindingTests(unittest.TestCase):
             contract, "n", capabilities={"fetch": surface},
             binding_agent=place, approval_enabled=False,
             continuation_enabled=False)
-        episode.observe("read", {}, {"body": "See https://example.com/x"})
-        decision = episode.effect("fetch", {"url": "https://example.com/x"})
+        episode.observe("read", {}, {"body": "See www.example.com/x!"})
+        decision = episode.effect("fetch", {"url": "https://www.example.com/x"})
         self.assertEqual("pass", decision.route)
         self.assertIn("@", decision.refs[0])
         self.assertEqual([], calls)
+
+    def test_url_projection_does_not_equate_www_with_apex(self):
+        contract = TaskContract("fetch the URL Bob posted", [
+            AcquireClause("", "message", "read", {}, "message"),
+            DeriveClause("", "URL Bob posted", ("c0.message",), "url"),
+            EffectClause("", "fetch", "fetch", {
+                "url": {"from": "c1.url", "delegated": True}})])
+        surface = CapabilitySurface.from_dict({
+            "name": "fetch", "effect": True, "observation": True,
+            "effect_return": True, "arguments": ["url"],
+            "required_arguments": ["url"],
+            "inputSchema": {"type": "object", "properties": {
+                "url": {"type": "string", "format": "uri",
+                        "x-canonicalization": "url-default-https"}}},
+            "argument_types": {"url": "url"}})
+        episode = Episode(
+            contract, "n", capabilities={"fetch": surface},
+            binding_agent=lambda **_: {"placements": []},
+            approval_enabled=False, continuation_enabled=False)
+        episode.observe("read", {}, {"body": "See www.example.com/x!"})
+        decision = episode.effect("fetch", {"url": "https://example.com/x"})
+        self.assertEqual("deny", decision.route)
+        self.assertEqual("untraceable-arg:url", decision.reason)
 
     def test_delegated_projection_rejects_ambiguous_exact_leaves(self):
         contract = TaskContract("fetch the URL Bob posted", [
@@ -619,6 +645,78 @@ class LazyBindingTests(unittest.TestCase):
         decision = episode.effect("book", {"title": "Montmartre Suites"})
         self.assertEqual("pass", decision.route)
         self.assertIn(GROUNDED_REF, decision.refs)
+
+    def test_add_inverse_hints_receipt_derived_delta(self):
+        contract = TaskContract("increase rent based on the landlord notice", [
+            AcquireClause("", "landlord notice", "read", {}, "notice"),
+            AcquireClause("", "current rent", "current", {}, "amount"),
+            DeriveClause("", "numeric rent increase stated by the notice",
+                         ("c0.notice",), "increase"),
+            ConditionalClause("", "new rent", "add", (
+                "c1.amount", "c2.increase"), "new_amount"),
+            EffectClause("", "update rent", "update", {
+                "amount": {"from": "c3.new_amount"}})])
+        surface = CapabilitySurface.from_dict({
+            "name": "update", "effect": True,
+            "arguments": ["amount"], "required_arguments": ["amount"]})
+
+        def place(**request):
+            goal = request["goals"][0]
+            self.assertEqual("amount", goal["argument"])
+            self.assertEqual(100, goal["proposed"])
+            self.assertEqual("exact_or_grounded", goal["support_mode"])
+            candidates = {
+                item["value"]: item["candidate_id"]
+                for item in goal["candidates"]}
+            return {"placements": [{
+                "goal_id": goal["goal_id"],
+                "candidate_ids": [candidates[100]],
+                "compose": "scalar"}]}
+
+        episode = Episode(
+            contract, "n", capabilities={"update": surface},
+            binding_agent=place, approval_enabled=False,
+            continuation_enabled=False)
+        episode.observe("read", {}, "Rent increased by 100.00 next month.")
+        episode.observe("current", {}, 1100)
+        decision = episode.effect("update", {"amount": 1200})
+        self.assertEqual("pass", decision.route)
+
+    def test_arithmetic_inverse_hints_chain_to_task_derive(self):
+        contract = TaskContract(
+            "We spent 12.00 in total; refund the excess.", [
+                DeriveClause("", "dinner total explicitly stated in task",
+                             ("task",), "dinner_total"),
+                ConditionalClause("", "friend half", "percent_of", (
+                    "c0.dinner_total", {"literal": 50}), "friend_share"),
+                ConditionalClause("", "negative share", "multiply", (
+                    "c1.friend_share", {"literal": -1}), "negative_share"),
+                ConditionalClause("", "refund amount", "add", (
+                    {"literal": 10}, "c2.negative_share"), "refund_amount"),
+                EffectClause("", "send refund", "send", {
+                    "amount": {"from": "c3.refund_amount"}})])
+        surface = CapabilitySurface.from_dict({
+            "name": "send", "effect": True,
+            "arguments": ["amount"], "required_arguments": ["amount"]})
+
+        def place(**request):
+            goal = request["goals"][0]
+            self.assertEqual("amount", goal["argument"])
+            self.assertEqual(12, goal["proposed"])
+            candidates = {
+                item["value"]: item["candidate_id"]
+                for item in goal["candidates"]}
+            return {"placements": [{
+                "goal_id": goal["goal_id"],
+                "candidate_ids": [candidates[12]],
+                "compose": "scalar"}]}
+
+        episode = Episode(
+            contract, "n", capabilities={"send": surface},
+            binding_agent=place, approval_enabled=False,
+            continuation_enabled=False)
+        decision = episode.effect("send", {"amount": 4})
+        self.assertEqual("pass", decision.route)
 
     def test_invalid_batched_goal_does_not_erase_valid_grounding(self):
         contract = TaskContract("write the requested summary", [

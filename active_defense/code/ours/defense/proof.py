@@ -68,6 +68,17 @@ class BindingGoal:
         }
 
 
+@dataclass(frozen=True)
+class ProposalProofs:
+    """Disjoint proof channels produced by deterministic validation."""
+
+    exact: dict
+    grounded: dict
+    semantic: dict
+    delegated: dict
+    placements: dict
+
+
 def _nodes(value, ref):
     yield value, ref
     if isinstance(value, dict):
@@ -96,6 +107,8 @@ def _typed_spans(value, ref, expected_type):
     # one of these code-issued spans and replay still checks the operator.
     if expected_type in {"any", "number", "number-list"}:
         yield from _numeric_spans(value, ref) or ()
+    if isinstance(value, str) and expected_type in {"any", "string", "url"}:
+        yield from _url_spans(value, ref) or ()
     if not isinstance(value, str) or expected_type not in {"string", "datetime"}:
         return
     patterns = (
@@ -121,11 +134,37 @@ def _source_leaves(value, ref):
         yield value, ref
 
 
-def _project_scalar(value, selected):
+_URL_AUTHORITY_SPAN = re.compile(r"(?:https?://|www\.)[^\s<>'\"]+", re.I)
+_URL_TRAILING_PUNCTUATION = ".,;:!?)"
+
+
+def _url_spans(value: str, ref: str):
+    """Yield conservative URL authority spans from trusted text leaves.
+
+    This is still exact proof: code points to the concrete trusted substring.
+    Canonical equivalence is checked later by the operator-declared URL
+    argument schema, so apex domains are not silently equated with ``www``.
+    """
+    if not isinstance(value, str):
+        return
+    for match in _URL_AUTHORITY_SPAN.finditer(value):
+        start, end = match.start(), match.end()
+        token = match.group(0)
+        trimmed = token.rstrip(_URL_TRAILING_PUNCTUATION)
+        if not trimmed:
+            continue
+        end -= len(token) - len(trimmed)
+        yield trimmed, f"{ref}@{start}:{end}"
+
+
+def _project_scalar(value, selected, equal=None):
     exact, spans = [], []
     for row in selected:
         for leaf, ref in _source_leaves(row["value"], row["ref"]):
             if leaf == value and type(leaf) is type(value):
+                exact.extend(row.get("refs") or (ref,))
+            elif (equal is not None and isinstance(value, str) and
+                  isinstance(leaf, str) and value and equal(leaf, value)):
                 exact.extend(row.get("refs") or (ref,))
             elif isinstance(value, str) and isinstance(leaf, str) and value:
                 starts = [item.start() for item in re.finditer(
@@ -134,6 +173,10 @@ def _project_scalar(value, selected):
                     start = starts[0]
                     spans.extend(row.get("refs") or
                                  (f"{ref}@{start}:{start + len(value)}",))
+                if equal is not None:
+                    for token, span_ref in _url_spans(leaf, ref) or ():
+                        if equal(token, value):
+                            spans.extend(row.get("refs") or (span_ref,))
             elif (isinstance(value, (int, float)) and
                   not isinstance(value, bool) and isinstance(leaf, str)):
                 for match in re.finditer(
@@ -149,7 +192,7 @@ def _project_scalar(value, selected):
     return tuple(witnesses) if len(witnesses) == 1 else ()
 
 
-def project_value(value, selected):
+def project_value(value, selected, equal=None):
     """Replay exact node/span or recursive list/object composition."""
     for row in selected:
         if stable(row["value"]) == stable(value):
@@ -157,7 +200,7 @@ def project_value(value, selected):
     if isinstance(value, dict):
         refs = []
         for child in value.values():
-            proof = project_value(child, selected)
+            proof = project_value(child, selected, equal)
             if not proof:
                 return ()
             refs.extend(proof)
@@ -165,12 +208,12 @@ def project_value(value, selected):
     if isinstance(value, (list, tuple)):
         refs = []
         for child in value:
-            proof = project_value(child, selected)
+            proof = project_value(child, selected, equal)
             if not proof:
                 return ()
             refs.extend(proof)
         return tuple(dict.fromkeys(refs)) if value else ()
-    return _project_scalar(value, selected)
+    return _project_scalar(value, selected, equal)
 
 
 def _project_closed_member(value, selected):
@@ -186,7 +229,7 @@ def _project_closed_member(value, selected):
     return tuple(dict.fromkeys(row.get("refs") or (row["ref"],)))
 
 
-def project_delegated_value(value, candidates):
+def project_delegated_value(value, candidates, equal=None):
     """Prove an explicit delegation by unique exact leaf projection.
 
     Delegation authorizes a named upstream value source, not semantic value
@@ -215,7 +258,7 @@ def project_delegated_value(value, candidates):
                     return ()
                 refs.extend(proof)
             return tuple(dict.fromkeys(refs)) if item else ()
-        return _project_scalar(item, leaves)
+        return _project_scalar(item, leaves, equal)
 
     return project(value)
 
@@ -338,8 +381,87 @@ def _collect_leaves(contract, ref, expected, found, seen=frozenset()):
                     seen | {ref})
 
 
-def _derive_hints(contract, ref, proposed, found, seen=frozenset()):
-    """Back-propagate an Effect value only through value-preserving algebra.
+def _decimal(value):
+    if isinstance(value, bool) or isinstance(value, (dict, list, tuple)):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _number_value(value: Decimal):
+    return int(value) if value == value.to_integral() else float(value)
+
+
+def _unique_value(resolver, operand):
+    if isinstance(operand, dict) and set(operand) == {"literal"}:
+        return True, operand["literal"]
+    if not isinstance(operand, str):
+        return False, None
+    rows = tuple(resolver.values(operand)) if resolver is not None else ()
+    if len(rows) != 1:
+        return False, None
+    return True, rows[0].value
+
+
+def _single_unknown_numeric_inverse(operator, operands, proposed, resolver):
+    """Return one ``(operand, value)`` hint for closed single-unknown algebra.
+
+    The hint is never authority by itself.  It only turns an Effect argument
+    already supplied by the target into a concrete value hypothesis for a
+    Contract-declared Derive role; WRAP still requires the ordinary
+    candidate-placement and replay proof before an Effect can pass.
+    """
+    target = _decimal(proposed)
+    if target is None:
+        return ()
+    known = []
+    unknown = []
+    for index, operand in enumerate(operands):
+        ok, value = _unique_value(resolver, operand)
+        if ok:
+            parsed = _decimal(value)
+            if parsed is None:
+                return ()
+            known.append((index, parsed))
+        elif isinstance(operand, str):
+            unknown.append((index, operand))
+        else:
+            return ()
+    if len(unknown) != 1:
+        return ()
+    index, operand = unknown[0]
+    try:
+        if operator == "add":
+            value = target - sum((item for _idx, item in known), Decimal(0))
+        elif operator == "multiply" and len(operands) == 2 and known:
+            known_value = known[0][1]
+            if known_value == 0:
+                return ()
+            value = target / known_value
+        elif operator == "percent_of" and len(operands) == 2 and known:
+            known_index, known_value = known[0]
+            if known_value == 0:
+                return ()
+            if index == 0:
+                # target = base * percent / 100
+                value = target * Decimal(100) / known_value
+            elif known_index == 0:
+                # target = base * percent / 100
+                value = target * Decimal(100) / known_value
+            else:
+                return ()
+        else:
+            return ()
+    except (InvalidOperation, ValueError, ZeroDivisionError):
+        return ()
+    return ((operand, _number_value(value)),)
+
+
+def _derive_hints(contract, ref, proposed, found, resolver=None,
+                  seen=frozenset()):
+    """Back-propagate an Effect value through closed proof algebra.
 
     This never asks the Binding Agent to invent a value.  The hypothesis is
     the concrete Effect argument supplied by code; the Agent may only select
@@ -370,9 +492,13 @@ def _derive_hints(contract, ref, proposed, found, seen=frozenset()):
     elif (clause.operator == "singleton" and operands and
           isinstance(proposed, (list, tuple)) and len(proposed) == 1):
         forwarded = [(operands[0], proposed[0])]
+    elif clause.operator in {"add", "multiply", "percent_of"}:
+        forwarded = _single_unknown_numeric_inverse(
+            clause.operator, operands, proposed, resolver)
     for operand, value in forwarded:
         if isinstance(operand, str) and operand in by_ref:
-            _derive_hints(contract, operand, value, found, seen | {ref})
+            _derive_hints(contract, operand, value, found, resolver,
+                          seen | {ref})
 
 
 _CONFLICT = object()
@@ -416,7 +542,8 @@ def compile_goals(state: RuntimeState, contract, action, arguments, surface,
             sources = [raw] if isinstance(raw, str) else list(raw or ())
             hints = {}
             for source in sources:
-                _derive_hints(contract, source, arguments[name], hints)
+                _derive_hints(contract, source, arguments[name], hints,
+                              resolver)
             matches = [row for source in sources for row in resolver.values(source)
                        if equal(name, row.value, arguments[name])]
             if matches:
@@ -493,7 +620,10 @@ def compile_goals(state: RuntimeState, contract, action, arguments, surface,
                     # Preserve the zero-model exact path over the complete
                     # code-owned domain. Candidate compaction below is only a
                     # public-protocol optimization after exact closure failed.
-                    refs = project_delegated_value(arguments[name], rows)
+                    refs = project_delegated_value(
+                        arguments[name], rows,
+                        equal=lambda candidate, proposed, argument=name: equal(
+                            argument, candidate, proposed))
                     if refs:
                         immediate_delegated[(effect.id, name)] = refs
                         continue
@@ -545,7 +675,7 @@ def compile_goals(state: RuntimeState, contract, action, arguments, surface,
 
 def apply_placements(state, contract, action, arguments, surface, goals,
                      immediate, immediate_delegated, proposal, equal):
-    """Validate id-only placements and return ordinary/delegated proof refs."""
+    """Validate placements and keep exact/model proof channels disjoint."""
     rows = proposal.get("placements") if isinstance(proposal, dict) else None
     if not isinstance(rows, list):
         rows = []
@@ -567,7 +697,7 @@ def apply_placements(state, contract, action, arguments, surface, goals,
             continue
         selected[goal.id] = (compose, [choices[str(item)] for item in ids])
 
-    placements, direct_exact, direct_semantic = {}, {}, {}
+    placements, direct_exact, direct_grounded, direct_semantic = {}, {}, {}, {}
     delegated = dict(immediate_delegated)
     for goal in goals:
         choice = selected.get(goal.id)
@@ -600,7 +730,10 @@ def apply_placements(state, contract, action, arguments, surface, goals,
             continue
         if (compose == "object") != isinstance(goal.proposed, dict):
             continue
-        refs = project_value(goal.proposed, candidates)
+        refs = project_value(
+            goal.proposed, candidates,
+            equal=lambda candidate, proposed, argument=goal.argument: equal(
+                argument, candidate, proposed))
         key = (goal.clause_id, goal.argument)
         if refs:
             placements[goal.target_ref] = (
@@ -614,7 +747,7 @@ def apply_placements(state, contract, action, arguments, surface, goals,
                 refs = (GROUNDED_REF, *evidence_refs)
                 placements[goal.target_ref] = (
                     Resolved(goal.proposed, refs),)
-                direct_exact[key] = refs
+                direct_grounded[key] = refs
         elif goal.allow_semantic:
             evidence_refs = tuple(dict.fromkeys(
                 ref.split("@", 1)[0] for item in candidates
@@ -640,5 +773,15 @@ def apply_placements(state, contract, action, arguments, surface, goals,
                 target = (delegated if spec.get("delegated") is True else exact)
                 target[(effect.id, name)] = refs
     exact.update(direct_exact)
-    semantic = {**exact, **direct_semantic}
-    return semantic, delegated, placements
+    separated_exact, grounded = {}, dict(direct_grounded)
+    semantic = dict(direct_semantic)
+    for key, refs in exact.items():
+        refs = tuple(refs)
+        if SEMANTIC_REF in refs:
+            semantic[key] = refs
+        elif GROUNDED_REF in refs:
+            grounded[key] = refs
+        else:
+            separated_exact[key] = refs
+    return ProposalProofs(
+        separated_exact, grounded, semantic, delegated, placements)

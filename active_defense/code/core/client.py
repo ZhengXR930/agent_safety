@@ -313,11 +313,22 @@ DEEPSEEK_TRANSPORT_MODELS = {
 
 OPENAI_COMPATIBLE_GATEWAYS = {
     "claude-opus-4-7": ("YUNWU_API_URL", "YUNWU_API_KEY", "https://yunwu.ai/v1"),
+    "gpt-5.6-sol": ("TOTOKENS_API_URL", "TOTOKENS_API_KEY", "https://totokens.cc"),
 }
 
 
 # Models whose endpoint rejects an explicit `temperature` param.
-_NO_TEMP = {"kimi-k2.6", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
+_NO_TEMP = {"kimi-k2.6", "gpt-5.6-sol", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
+
+
+def _openai_gateway_headers(model: str, root: Path | None = None) -> dict | None:
+    """Provider-specific headers for OpenAI-compatible non-modelhub gateways."""
+    if model == "gpt-5.6-sol":
+        actor = (os.environ.get("TOTOKENS_ACTOR_AUTH") or
+                 read_config_key("TOTOKENS_ACTOR_AUTH", root=root) or
+                 "local-image-extension")
+        return {"x-openai-actor-authorization": actor}
+    return None
 
 
 def _normalize_model_params(client, model: str):
@@ -339,6 +350,29 @@ def _normalize_model_params(client, model: str):
     client.chat.completions.create = create
     return client
 
+
+
+def _normalize_thinking_disabled(client, model: str):
+    """Disable hidden reasoning for OpenAI-compatible models that otherwise
+    spend completion budget in provider-specific reasoning_content.
+
+    This is a transport compatibility shim, not a defense-policy change. It
+    preserves caller arguments and only supplies a default when the request did
+    not already choose a thinking mode.
+    """
+    if not str(model).lower().startswith("glm-"):
+        return client
+    original = client.chat.completions.create
+
+    def create(*args, **kwargs):
+        body = dict(kwargs.get("extra_body") or {})
+        if "enable_thinking" not in body and "thinking" not in body:
+            body["enable_thinking"] = False
+        kwargs["extra_body"] = body
+        return original(*args, **kwargs)
+
+    client.chat.completions.create = create  # type: ignore[assignment]
+    return client
 
 def _normalize_deepseek_roles(client: OpenAI) -> OpenAI:
     """Adapt the OpenAI `developer` role to DeepSeek's equivalent `system` role."""
@@ -500,7 +534,10 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
         if not key:
             raise RuntimeError(f"Missing {key_env} (env or config.txt).")
         url = os.environ.get(url_env) or read_config_key(url_env, root=root) or default_url
-        return _with_api_logging(OpenAI(base_url=url, api_key=key), model, "yunwu")
+        headers = _openai_gateway_headers(model, root=root)
+        provider = "totokens" if model == "gpt-5.6-sol" else "yunwu"
+        client = OpenAI(base_url=url, api_key=key, default_headers=headers)
+        return _with_api_logging(_normalize_model_params(client, model), model, provider)
     if model in MODEL_REGISTRY:
         key = read_config_key(api_key_env, root=root)
         if not key:
@@ -513,7 +550,11 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
         )
         return _with_api_logging(_normalize_model_params(client, model), model, "modelhub")
     return _with_api_logging(
-        internal_openai_client(api_key_env=api_key_env, root=root), model, "gpt_openapi")
+        _normalize_model_params(
+            _normalize_thinking_disabled(
+                internal_openai_client(api_key_env=api_key_env, root=root), model),
+            model),
+        model, "gpt_openapi")
 
 @lru_cache(maxsize=16)
 def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
@@ -541,9 +582,10 @@ def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
             raise RuntimeError(f"Missing {key_env} (environment or config.txt).")
         url = os.environ.get(url_env) or read_config_key(
             url_env, root=root) or default_url
+        headers = _openai_gateway_headers(model, root=root)
+        client = AsyncOpenAI(base_url=url, api_key=key, default_headers=headers, timeout=90.0)
         return OpenAIChatCompletionsModel(
-            model, _with_usage_accounting(
-                AsyncOpenAI(base_url=url, api_key=key, timeout=90.0)))
+            model, _with_usage_accounting(_normalize_model_params(client, model)))
     if model in MODEL_REGISTRY:
         key = read_config_key(api_key_env, root=root)
         if not key:
@@ -560,8 +602,8 @@ def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
     if not key:
         raise RuntimeError(
             f"Missing {api_key_env} (environment or repository config.txt).")
-    client = _with_usage_accounting(AsyncOpenAI(
+    client = _with_usage_accounting(_normalize_thinking_disabled(AsyncOpenAI(
         base_url=os.environ.get(
             "INTERNAL_OPENAI_BASE_URL", DEFAULT_INTERNAL_BASE_URL),
-        api_key=key, default_headers={"Api-Key": key}, timeout=90.0))
+        api_key=key, default_headers={"Api-Key": key}, timeout=90.0), model))
     return OpenAIChatCompletionsModel(model, client)

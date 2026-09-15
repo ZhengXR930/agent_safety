@@ -12,13 +12,12 @@ class MCPToxAdapter(BenchmarkAdapter):
     protocol_path = Path(__file__).with_name("protocol.json")
     _modules = {
         "ours": "code.benchmarks.mcp_common.runtime",
-        "wrap_only": "code.benchmarks.mcp_common.runtime",
-        "plant_only": "code.benchmarks.mcp_common.runtime",
         "undefended": "code.benchmarks.mcptox.execution.undefended",
         "mcp_itp": "code.benchmarks.mcptox.adaptive.mcp_itp",
         "mcp_guard": "code.benchmarks.mcptox.execution.mcpguard_e2e",
         "pipelock": "code.benchmarks.mcptox.execution.pipelock",
         "stackone": "code.benchmarks.mcptox.execution.stackone_e2e",
+        "clawguard": "code.benchmarks.mcptox.execution.clawguard_e2e",
     }
 
     def cases(self, split: str | None = None):
@@ -33,8 +32,9 @@ class MCPToxAdapter(BenchmarkAdapter):
     def command(self, method: str, request: RunRequest) -> list[str]:
         self.require_method(method)
         command = [sys.executable, "-m", self._modules[method]]
-        active_defense = method in {"ours", "wrap_only", "plant_only"}
-        if active_defense or method in {"undefended", "mcp_itp", "mcp_guard", "stackone"}:
+        active_defense = method == "ours"
+        if active_defense or method in {
+                "undefended", "mcp_itp", "mcp_guard", "stackone", "clawguard"}:
             command.extend(["--model", request.target_model])
         if active_defense:
             command.extend([
@@ -42,21 +42,16 @@ class MCPToxAdapter(BenchmarkAdapter):
                 "--contracts-input",
                 str(Path(__file__).resolve().parents[3] /
                     "code/ours/contracts/mcptox/contracts.json"),
-                "--ablation-mode",
-                {
-                    "ours": "full",
-                    "wrap_only": "wrap_only",
-                    "plant_only": "plant_only",
-                }[method],
             ])
         if active_defense and request.defense_model:
             command.extend(["--contract-model", request.defense_model])
-        if (method in {"undefended", "mcp_guard", "stackone"}
+        if (method in {"undefended", "mcp_guard", "stackone", "clawguard"}
                 and request.judge_model):
             command.extend(["--evaluation-model", request.judge_model])
         if method == "mcp_itp" and request.judge_model:
             command.extend(["--judge-model", request.judge_model])
-        if active_defense or method in {"undefended", "mcp_itp", "mcp_guard", "stackone"}:
+        if active_defense or method in {
+                "undefended", "mcp_itp", "mcp_guard", "stackone", "clawguard"}:
             command.extend(["--workers", str(request.workers)])
         command.extend(["--output", str(request.output)])
         if request.resume and method != "pipelock":

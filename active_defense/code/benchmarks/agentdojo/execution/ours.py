@@ -117,13 +117,13 @@ def main() -> None:
     parser.add_argument(
         "--approval-policy", choices=("none", "approve-all"), default="none",
         help="explicit eval-only simulated user; never enabled by default")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument(
         "--clean-only", action="store_true",
         help="run each unique clean task once without constructing attacks")
+    parser.add_argument(
+        "--attack-only", action="store_true",
+        help="resume/evaluate attack pairs without filling missing clean tasks")
     parser.add_argument("--preflight-only", action="store_true",
                         help="generate, validate and freeze all Contracts only")
     parser.add_argument(
@@ -142,7 +142,9 @@ def main() -> None:
     if args.max_pairs:
         pairs = pairs[:args.max_pairs]
     task_ids = list(dict.fromkeys(task for task, _ in pairs))
-    attack_total = 0 if args.clean_only else len(pairs)
+    if args.clean_only and args.attack_only:
+        raise ValueError("--clean-only and --attack-only are mutually exclusive")
+    attack_total = len(pairs)
     config = {
         "suite": args.suite,
         "benchmark_version": args.benchmark_version,
@@ -153,16 +155,24 @@ def main() -> None:
         "contract_file": list(args.contract_file),
         "max_pairs": args.max_pairs,
         "approval_policy": args.approval_policy,
-        "ablation_mode": args.ablation_mode,
         "task_overrides": args.task_overrides,
         "preflight_only": args.preflight_only,
         "clean_only": args.clean_only,
+        "attack_only": args.attack_only,
         "frozen_contracts_only": args.frozen_contracts_only,
     }
     output = Path(args.output)
+    phase_flags = {"clean_only", "attack_only", "preflight_only"}
+
+    def comparable_config(value):
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items()
+                if key not in phase_flags}
+
     if args.resume and output.exists():
         state = json.loads(output.read_text(encoding="utf-8"))
-        if state.get("config") != config:
+        if comparable_config(state.get("config")) != comparable_config(config):
             raise ValueError("resume config differs from checkpoint config")
     else:
         state = {
@@ -178,8 +188,7 @@ def main() -> None:
     suite = get_suite(args.benchmark_version, args.suite)
     engine = Engine(
         args.contract_model,
-        approval_enabled=args.approval_policy == "approve-all",
-        ablation_mode=args.ablation_mode)
+        approval_enabled=args.approval_policy == "approve-all")
     approver = ((lambda _request: True)
                 if args.approval_policy == "approve-all" else None)
     runner = AgentDojoRunner(
@@ -220,13 +229,16 @@ def main() -> None:
         if task_id in overrides:
             user_task.PROMPT = overrides[task_id]
         if task_id not in contracts:
-            if task_id in state["contracts"]:
-                contract = TaskContract.from_dict(state["contracts"][task_id])
-            elif task_id in frozen:
+            if task_id in frozen:
                 contract = TaskContract.from_dict(frozen[task_id])
-                state["contracts"][task_id] = contract.to_dict()
-                state["summary"] = _summary(state, attack_total, len(task_ids))
-                _write(output, state)
+                frozen_dict = contract.to_dict()
+                if state["contracts"].get(task_id) != frozen_dict:
+                    state["contracts"][task_id] = frozen_dict
+                    state["summary"] = _summary(
+                        state, attack_total, len(task_ids))
+                    _write(output, state)
+            elif task_id in state["contracts"]:
+                contract = TaskContract.from_dict(state["contracts"][task_id])
             else:
                 if args.frozen_contracts_only:
                     raise ValueError(
@@ -237,7 +249,7 @@ def main() -> None:
                 _write(output, state)
             contracts[task_id] = contract
             # AgentDojoRunner records the engine trace even when a Contract is
-            # supplied.  Register the frozen object so resume/manual ablations
+            # supplied.  Register the frozen object so resume/manual overrides
             # do not trigger an unused second synthesis call.
             key = engine._key(user_task.PROMPT, None)
             engine._contracts[key] = contract
@@ -255,7 +267,7 @@ def main() -> None:
             }, ensure_ascii=False), flush=True)
             continue
 
-        if task_id not in state["benign_by_task"]:
+        if task_id not in state["benign_by_task"] and not args.attack_only:
             state["benign_by_task"][task_id] = _strip_trace(
                 runner.run(user_task, contract=contract))
             state["summary"] = _summary(state, attack_total, len(task_ids))

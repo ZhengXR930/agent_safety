@@ -8,8 +8,8 @@ from code.ours.defense.resolver import resolve_conditional
 from code.ours.defense.memory import (CapabilitySurface, argument_values_equal,
                                  canonical_schema_scalar,
                                  schema_values_equal)
-from code.ours.defense.state import (SEMANTIC_REF, Binding, Receipt,
-                                RuntimeState)
+from code.ours.defense.state import (GROUNDED_REF, SEMANTIC_REF, Binding,
+                                     Receipt, RuntimeState)
 from code.ours.defense.wrap import QUERY_REF, authority_atoms, check_effect
 
 
@@ -29,6 +29,8 @@ class SchemaCompletionTests(unittest.TestCase):
             {"type": "integer"}, True, 1))
         self.assertTrue(schema_values_equal(
             {"type": "number"}, "500.0", 500))
+        self.assertTrue(schema_values_equal(
+            {"anyOf": [{"type": "number"}, {"type": "null"}]}, 1200, 1200.0))
         self.assertEqual(
             "0500", canonical_schema_scalar({"type": "integer"}, "0500"))
 
@@ -50,6 +52,70 @@ class SchemaCompletionTests(unittest.TestCase):
         self.assertFalse(argument_values_equal(
             path, "path", "/Data/Report", "/data/report"))
         self.assertFalse(argument_values_equal(path, "path", "500", 500))
+
+    def test_nullable_optional_argument_is_operator_noop_default(self):
+        surface = CapabilitySurface.from_dict({
+            "name": "update",
+            "effect": True,
+            "arguments": ["id", "recipient"],
+            "inputSchema": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                    "id": {"type": "integer"},
+                    "recipient": {
+                        "anyOf": [
+                            {"type": "string"},
+                            {"type": "null"},
+                        ],
+                    },
+                },
+            },
+        })
+        defaults = {
+            name: schema["default"]
+            for name, schema in surface.argument_schemas
+            if "default" in schema
+        }
+        self.assertEqual({"recipient": None}, defaults)
+        contract = TaskContract("update id only", [
+            EffectClause("", "update", "update", {
+                "id": {"literal": 7},
+                "recipient": {"from": "c99.recipient"},
+            }),
+        ])
+        equal = lambda name, left, right: argument_values_equal(
+            surface, name, left, right)
+        self.assertTrue(check_effect(
+            RuntimeState(), contract, "update",
+            {"id": 7, "recipient": None},
+            required=frozenset(surface.required), defaults=defaults,
+            equal=equal).ok)
+        self.assertEqual("untraceable-arg:recipient", check_effect(
+            RuntimeState(), contract, "update",
+            {"id": 7, "recipient": "attacker"},
+            required=frozenset(surface.required), defaults=defaults,
+            equal=equal).reason)
+
+    def test_required_nullable_argument_is_not_noop_default(self):
+        surface = CapabilitySurface.from_dict({
+            "name": "update",
+            "effect": True,
+            "arguments": ["recipient"],
+            "inputSchema": {
+                "type": "object",
+                "required": ["recipient"],
+                "properties": {
+                    "recipient": {"type": ["string", "null"]},
+                },
+            },
+        })
+        defaults = {
+            name: schema["default"]
+            for name, schema in surface.argument_schemas
+            if "default" in schema
+        }
+        self.assertEqual({}, defaults)
 
     def test_operator_attested_date_completion(self):
         schema = {
@@ -167,6 +233,32 @@ class TraceTests(unittest.TestCase):
             required=frozenset({"query"}), defaults={"max_results": 10})
         self.assertEqual("uncontracted-arg:max_results", v.reason)
 
+    def test_operator_default_closes_contracted_helper_arg(self):
+        contract = TaskContract("run helper", [
+            EffectClause("c1", "run", "run_task_script", {
+                "path": {"literal": "make_event.py"},
+                "argv": {"from": "c0.argv"},
+            }),
+        ])
+        v = check_effect(
+            RuntimeState(), contract, "run_task_script",
+            {"path": "make_event.py", "argv": []},
+            required=frozenset({"path"}), defaults={"argv": []})
+        self.assertTrue(v.ok)
+
+    def test_nondefault_contracted_helper_arg_still_needs_binding(self):
+        contract = TaskContract("run helper", [
+            EffectClause("c1", "run", "run_task_script", {
+                "path": {"literal": "make_event.py"},
+                "argv": {"from": "c0.argv"},
+            }),
+        ])
+        v = check_effect(
+            RuntimeState(), contract, "run_task_script",
+            {"path": "make_event.py", "argv": ["--target", "x"]},
+            required=frozenset({"path"}), defaults={"argv": []})
+        self.assertEqual("untraceable-arg:argv", v.reason)
+
     def test_required_uncontracted_arg_denied(self):
         contract = TaskContract("pay", [
             EffectClause("", "pay", "send", {"to": {"literal": "x"}}),
@@ -276,6 +368,58 @@ class RuntimeAuthorityBoundaryTests(unittest.TestCase):
             semantic_proofs=proof)
         self.assertFalse(verdict.ok)
         self.assertEqual("untraceable-arg:email", verdict.reason)
+
+    def test_grounded_proof_cannot_close_effect_argument(self):
+        contract = TaskContract("schedule the matching device", [
+            DeriveClause("", "identify matching device", ("task",), "device"),
+            EffectClause("", "schedule", "schedule_device", {
+                "device": {"from": "c0.device"}}),
+        ])
+        key = (contract.clauses[1].id, "device")
+        verdict = check_effect(
+            RuntimeState(), contract, "schedule_device", {"device": "d-8"},
+            grounded_proofs={key: (GROUNDED_REF, "receipt#/device")})
+        self.assertFalse(verdict.ok)
+        self.assertEqual("untraceable-arg:device", verdict.reason)
+
+    def test_semantic_content_proof_cannot_close_effect_argument(self):
+        contract = TaskContract("send the requested summary", [
+            DeriveClause("", "write summary", ("task",), "body"),
+            EffectClause("", "send", "send", {
+                "body": {"from": "c0.body"}}),
+        ])
+        key = (contract.clauses[1].id, "body")
+        verdict = check_effect(
+            RuntimeState(), contract, "send", {"body": "semantic summary"},
+            content={"body"},
+            semantic_proofs={key: (SEMANTIC_REF, "receipt#/body")})
+        self.assertFalse(verdict.ok)
+        self.assertEqual("untraceable-arg:body", verdict.reason)
+
+    def test_restriction_blocks_model_proofs_but_not_exact_proof(self):
+        contract = TaskContract("share the selected file", [
+            DeriveClause("", "selected file id", ("task",), "file_id"),
+            EffectClause("", "share", "share", {
+                "file_id": {"from": "c0.file_id"}}),
+        ])
+        key = (contract.clauses[1].id, "file_id")
+        exact = check_effect(
+            RuntimeState(), contract, "share", {"file_id": "26"},
+            exact_proofs={key: ("receipt#", QUERY_REF)},
+            exact_only={"file_id"})
+        grounded = check_effect(
+            RuntimeState(), contract, "share", {"file_id": "26"},
+            grounded_proofs={key: (GROUNDED_REF, "receipt#")},
+            exact_only={"file_id"})
+        semantic = check_effect(
+            RuntimeState(), contract, "share", {"file_id": "26"},
+            content={"file_id"},
+            semantic_proofs={key: (SEMANTIC_REF, "receipt#")},
+            exact_only={"file_id"})
+
+        self.assertTrue(exact.ok)
+        self.assertFalse(grounded.ok)
+        self.assertFalse(semantic.ok)
 
 if __name__ == "__main__":
     unittest.main()

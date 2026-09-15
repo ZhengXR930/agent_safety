@@ -11,6 +11,7 @@ import json
 import os
 
 from code.ours.defense.contract import AcquireClause, EffectClause
+from code.ours.defense.memory import canonical_argument_value
 from code.ours.defense.resolver import LazyResolver
 from code.ours.defense.state import (CONTEXT_REF, GROUNDED_REF, QUERY_REF,
                                      SEMANTIC_REF, RuntimeState, digest, stable)
@@ -19,7 +20,7 @@ from code.ours.defense.state import (CONTEXT_REF, GROUNDED_REF, QUERY_REF,
 REPAIR = "repair"
 REPLAN = "replan"
 ABORT = "abort"
-RECOVERY_ENVELOPE_SCHEMA = "active-defense-recovery-v4"
+RECOVERY_ENVELOPE_SCHEMA = "active-defense-recovery-v5"
 
 
 class ReplanRequired(RuntimeError):
@@ -57,6 +58,7 @@ class RecoveryEnvelope:
     reused_observations: tuple[dict, ...] = ()
     denied_resources: tuple[str, ...] = ()
     attempted_effects: tuple[dict, ...] = ()
+    committed_effects: tuple[dict, ...] = ()
     verified_effects: tuple[dict, ...] = ()
 
     def to_dict(self) -> dict:
@@ -73,6 +75,8 @@ class RecoveryEnvelope:
             "denied_resources": list(self.denied_resources),
             "attempted_effects": [dict(item)
                                   for item in self.attempted_effects],
+            "committed_effects": [dict(item)
+                                  for item in self.committed_effects],
             "verified_effects": [dict(item)
                                  for item in self.verified_effects],
         }
@@ -83,7 +87,8 @@ def render_recovery_task(task: str, envelope: dict) -> str:
     fields = {
         "schema", "trusted_task", "required_acquires",
         "remaining_effects", "evidence", "reused_observations",
-        "denied_resources", "attempted_effects", "verified_effects",
+        "denied_resources", "attempted_effects", "committed_effects",
+        "verified_effects",
     }
     if (not isinstance(envelope, dict) or set(envelope) != fields or
             envelope.get("schema") != RECOVERY_ENVELOPE_SCHEMA):
@@ -100,7 +105,10 @@ def render_recovery_task(task: str, envelope: dict) -> str:
         "known context and do not re-read those sources. attempted_effects "
         "are diagnostic "
         "only and do not prove task completion; use their summaries only to "
-        "avoid repeating failed work. Do not repeat verified_effects; use "
+        "avoid repeating failed work. committed_effects are exact native "
+        "invocations that completed successfully: do not repeat them and do "
+        "not treat their arguments as new authority. Do not repeat "
+        "verified_effects; use "
         "their summaries as already accepted progress. Do not use "
         "denied_resources."
     )
@@ -184,9 +192,10 @@ class ContinuationController:
     """One episode-local, conflict-bounded continuation state machine."""
 
     def __init__(self, contract, *, max_replans: int = 1,
-                 explanation_agent=None):
+                 explanation_agent=None, capabilities=None):
         self.contract = contract
         self.explanation_agent = explanation_agent
+        self.capabilities = capabilities or {}
         # One retry applies to one conflict class, not the whole episode.  A
         # path mismatch must not consume the later content obligation, while a
         # second path mismatch must not create an unbounded loop.
@@ -200,6 +209,7 @@ class ContinuationController:
         self._replans_by_conflict: dict[str, int] = {}
         self.denied_resources: set[str] = set()
         self.attempted_effects: list[dict] = []
+        self.committed_effects: list[dict] = []
         self.verified_effects: list[dict] = []
         self._receipt_views: dict[str, object] = {}
         self._plans: dict[str, ContinuationPlan] = {}
@@ -237,7 +247,8 @@ class ContinuationController:
         else:
             category = reason.split(":", 1)[0]
             argument = self._argument_from_reason(reason)
-            value_key = (digest(arguments.get(argument))
+            value_key = (digest(self._canonical_argument_value(
+                action, argument, arguments.get(argument)))
                          if argument and argument in arguments else "")
         return digest({
             "action": action,
@@ -245,6 +256,22 @@ class ContinuationController:
             "argument": self._argument_from_reason(reason),
             "value": value_key,
         })
+
+    def _canonical_argument_value(self, action: str, argument: str, value):
+        surface = self.capabilities.get(str(action))
+        return canonical_argument_value(surface, str(argument), value)
+
+    def _canonical_values_equal(self, action: str, argument: str,
+                                left, right) -> bool:
+        left = self._canonical_argument_value(action, argument, left)
+        right = self._canonical_argument_value(action, argument, right)
+        return type(left) is type(right) and left == right
+
+    def _arguments_equal(self, action: str, left: dict, right: dict) -> bool:
+        return set(left) == set(right) and all(
+            self._canonical_values_equal(
+                action, name, left[name], right[name])
+            for name in left)
 
     def _repair_candidates(self, state: RuntimeState, action: str,
                            arguments: dict, required, equal):
@@ -319,6 +346,32 @@ class ContinuationController:
             if any(str(ref).startswith(root)
                    for ref in binding.refs for root in roots)))
 
+    def _terminal_sources_from_contract(self) -> tuple[str, ...]:
+        produced = {
+            clause.output_ref for clause in self.contract.clauses
+            if clause.output_ref}
+        consumed = {
+            str(source) for clause in self.contract.clauses
+            for source in clause.sources if str(source) in produced}
+        return tuple(sorted(produced - consumed))
+
+    def _response_contract_sources(self) -> tuple[str, ...]:
+        """Bounded Contract sources that may support a final response.
+
+        A response is not a new root Effect, but it may legitimately summarize
+        read-only terminal values and already completed Effect arguments.  The
+        continuation envelope should expose only Contract-reachable sources,
+        never arbitrary prior context, and let the recovery agent answer from
+        those sanitized receipts plus committed_effects.
+        """
+        sources = list(self._terminal_sources_from_contract())
+        for clause in self.contract.clauses:
+            if not isinstance(clause, EffectClause):
+                continue
+            for spec in clause.effect_arguments.values():
+                sources.extend(self._sources(spec))
+        return tuple(dict.fromkeys(map(str, sources)))
+
     def _root_obligations(self) -> tuple[Obligation, ...]:
         """Describe Contract work that can still finish the trusted task."""
         effects: dict[str, set[str]] = {}
@@ -337,13 +390,7 @@ class ContinuationController:
         # A read/compute-only task has no external Effect.  Its terminal
         # Clause outputs are the bounded inputs of the final response; the
         # fresh Agent may reacquire/compute them but cannot invent an Effect.
-        produced = {
-            clause.output_ref for clause in self.contract.clauses
-            if clause.output_ref}
-        consumed = {
-            str(source) for clause in self.contract.clauses
-            for source in clause.sources if str(source) in produced}
-        terminal = tuple(sorted(produced - consumed))
+        terminal = self._terminal_sources_from_contract()
         return ((Obligation("complete_response", "$response",
                             allowed_sources=terminal),)
                 if terminal else ())
@@ -354,10 +401,12 @@ class ContinuationController:
             kind = ("resource_unavailable" if any(
                 row.get("plane") == "substrate" for row in events)
                     else "invalid_dependency")
+            sources = (self._response_contract_sources()
+                       if action == "$response" else ())
             return (Obligation(
-                kind, action,
+                kind, action, allowed_sources=sources,
                 why_not_supported=self._explain_obligation(
-                    kind, action, "", (), None, reason)),)
+                    kind, action, "", sources, None, reason)),)
         if reason.startswith("unauthorized-action:"):
             return self._root_obligations()
         argument = self._argument_from_reason(reason)
@@ -468,7 +517,8 @@ class ContinuationController:
             if item_action != action:
                 continue
             if arguments:
-                current = (digest(arguments.get(argument))
+                current = (digest(self._canonical_argument_value(
+                    action, argument, arguments.get(argument)))
                            if argument in arguments else "")
                 if value_key and current != value_key:
                     continue
@@ -587,16 +637,25 @@ class ContinuationController:
             for obligation in plan.obligations:
                 argument = obligation.argument
                 if argument:
-                    value_key = (digest(obligation.invalid_value)
+                    value_key = (digest(self._canonical_argument_value(
+                        plan.action, argument, obligation.invalid_value))
                                  if obligation.invalid_value is not None else "")
                     self._restricted_arguments.add(
                         (plan.action, argument, value_key))
         return plan
 
     def record_effect(self, action: str, arguments: dict, *,
-                      verified: bool = False) -> None:
+                      verified: bool = False,
+                      invocation_id: str = "",
+                      clause_id: str = "") -> None:
         row = {"action": str(action), "arguments": dict(arguments or {})}
         self.attempted_effects.append(row)
+        committed = dict(row)
+        if invocation_id:
+            committed["invocation_id"] = str(invocation_id)
+        if clause_id:
+            committed["clause_id"] = str(clause_id)
+        self.committed_effects.append(committed)
         if verified:
             self.verified_effects.append(dict(row))
 
@@ -635,6 +694,34 @@ class ContinuationController:
     def record_receipt_view(self, receipt, value) -> None:
         """Freeze the exact PLANT-decorated view previously shown to Agent."""
         self._receipt_views[str(receipt.digest)] = value
+
+    @staticmethod
+    def _scrub_tokens(value, tokens: set[str]):
+        """Remove denied PLANT handles before exposing recovery evidence."""
+        if not tokens:
+            return value
+        if isinstance(value, str):
+            text = value
+            for token in sorted(tokens, key=len, reverse=True):
+                if token:
+                    text = text.replace(token, "[removed untrusted content]")
+            return text
+        if isinstance(value, list):
+            return [ContinuationController._scrub_tokens(item, tokens)
+                    for item in value]
+        if isinstance(value, tuple):
+            return tuple(ContinuationController._scrub_tokens(item, tokens)
+                         for item in value)
+        if isinstance(value, dict):
+            return {key: ContinuationController._scrub_tokens(item, tokens)
+                    for key, item in value.items()}
+        return value
+
+    def _sanitized_receipt_view(self, receipt, plan: ContinuationPlan):
+        view = self._receipt_views[str(receipt.digest)]
+        tokens = set(map(str, self.denied_resources))
+        tokens.update(map(str, plan.denied_resources))
+        return self._scrub_tokens(view, tokens)
 
     def _reusable_observations(self, state: RuntimeState,
                                already: set[str]) -> list:
@@ -751,47 +838,77 @@ class ContinuationController:
         return bool(refs) and SEMANTIC_REF not in refs
 
     def _remaining_effect_clauses(self, state: RuntimeState):
-        """Remove only Effect instances already attested as successful."""
+        """Remove exact Effect instances already committed successfully."""
         resolver = LazyResolver(state, self.contract)
-        verified = [dict(item) for item in self.verified_effects]
+        committed = [dict(item) for item in self.committed_effects]
         remaining = []
         for clause in self.contract.clauses:
             if not isinstance(clause, EffectClause):
                 continue
             matched = None
-            for index, row in enumerate(verified):
+            for index, row in enumerate(committed):
                 if str(row.get("action", "")) != clause.action:
                     continue
+                if row.get("clause_id"):
+                    if str(row["clause_id"]) == clause.id:
+                        matched = index
+                        break
+                    continue
                 arguments = dict(row.get("arguments") or {})
-                known = [
-                    (name, value)
-                    for name, spec in clause.effect_arguments.items()
-                    for ok, value, _refs in (
-                        self._resolved_spec(resolver, spec),)
-                    if ok]
-                if ((known or not clause.effect_arguments) and
-                        all(name in arguments and
-                       type(arguments[name]) is type(value) and
-                       arguments[name] == value for name, value in known)):
+                resolved = [
+                    (name, *self._resolved_spec(resolver, spec)[:2])
+                    for name, spec in clause.effect_arguments.items()]
+                expected = {name: value for name, ok, value in resolved if ok}
+                if (len(expected) == len(resolved) and
+                        self._arguments_equal(
+                            clause.action, arguments, expected)):
                     matched = index
                     break
             if matched is None:
                 remaining.append(clause)
             else:
-                verified.pop(matched)
+                committed.pop(matched)
         return tuple(remaining)
+
+    def clause_already_committed(self, clause_id: str) -> bool:
+        clause_id = str(clause_id)
+        return bool(clause_id) and any(
+            str(item.get("clause_id", "")) == clause_id
+            for item in self.committed_effects)
+
+    def effect_already_committed(
+        self, state: RuntimeState, action: str, arguments: dict,
+    ) -> bool:
+        """Whether this exact successful invocation has no obligation left."""
+        action, arguments = str(action), dict(arguments or {})
+        seen = any(
+            str(item.get("action", "")) == action and
+            self._arguments_equal(
+                action, dict(item.get("arguments") or {}), arguments)
+            for item in self.committed_effects)
+        if not seen:
+            return False
+        resolver = LazyResolver(state, self.contract)
+        for clause in self._remaining_effect_clauses(state):
+            if clause.action != action:
+                continue
+            resolved = [
+                (name, *self._resolved_spec(resolver, spec)[:2])
+                for name, spec in clause.effect_arguments.items()]
+            expected = {name: value for name, ok, value in resolved if ok}
+            if (len(expected) == len(resolved) and
+                    self._arguments_equal(action, arguments, expected)):
+                return False
+        return True
 
     def _terminal_sources(self) -> tuple[str, ...]:
         """Return Contract outputs that feed the read/compute-only response."""
-        produced = {
-            clause.output_ref for clause in self.contract.clauses
-            if clause.output_ref}
-        consumed = {
-            str(source) for clause in self.contract.clauses
-            for source in clause.sources if str(source) in produced}
-        return tuple(sorted(produced - consumed))
+        return self._terminal_sources_from_contract()
 
-    def _recovery_sources(self, state: RuntimeState) -> tuple[str, ...]:
+    def _recovery_sources(self, state: RuntimeState,
+                          plan: ContinuationPlan) -> tuple[str, ...]:
+        if plan.action == "$response":
+            return self._response_contract_sources()
         remaining = self._remaining_effect_clauses(state)
         if remaining:
             return tuple(dict.fromkeys(
@@ -950,7 +1067,7 @@ class ContinuationController:
 
     def context(self, state: RuntimeState, plan: ContinuationPlan) -> dict:
         """Issue the only state an adapter may expose to a recovery Agent."""
-        sources = self._recovery_sources(state)
+        sources = self._recovery_sources(state, plan)
         visible = self._receipt_roots(state, sources)
         receipts = [receipt for receipt in state.receipts
                     if receipt.digest in self._receipt_views and
@@ -969,17 +1086,25 @@ class ContinuationController:
             evidence=tuple(
                 {"evidence_id": evidence_ids[receipt.digest + "#"],
                  "capability": receipt.capability,
-                 "value": self._receipt_views[receipt.digest]}
+                 "value": self._sanitized_receipt_view(receipt, plan)}
                 for receipt in receipts),
             reused_observations=tuple(
                 {"capability": receipt.capability,
                  "arguments": dict(receipt.arguments),
-                 "value": self._receipt_views[receipt.digest]}
+                 "value": self._scrub_tokens(
+                     self._receipt_views[receipt.digest],
+                     set(map(str, self.denied_resources)) |
+                     set(map(str, plan.denied_resources)))}
                 for receipt in reused),
             denied_resources=tuple(sorted(self.denied_resources)),
             attempted_effects=tuple(
                 self._effect_summary(item, verified=False)
                 for item in self.attempted_effects),
+            committed_effects=tuple({
+                "invocation_id": str(item.get("invocation_id", "")),
+                "action": str(item.get("action", "")),
+                "arguments": dict(item.get("arguments") or {}),
+            } for item in self.committed_effects),
             verified_effects=tuple(
                 self._effect_summary(item, verified=True)
                 for item in self.verified_effects),
@@ -996,5 +1121,6 @@ class ContinuationController:
                 for action, argument, value in sorted(self._restricted_arguments)
             ],
             "attempted_effects": list(self.attempted_effects),
+            "committed_effects": list(self.committed_effects),
             "verified_effects": list(self.verified_effects),
         }

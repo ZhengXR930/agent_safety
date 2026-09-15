@@ -322,6 +322,36 @@ def _canonicalize_nested_arguments(surface, arguments: dict):
     return arguments, tuple(sorted(unknown))
 
 
+def _omit_optional_null_arguments(surface, arguments: dict):
+    """Drop JSON-null values for optional schema fields that do not allow null."""
+    arguments = dict(arguments or {})
+    if surface is None:
+        return arguments, ()
+    schemas = dict(getattr(surface, "argument_schemas", ()) or ())
+    required = set(getattr(surface, "required", ()) or ())
+
+    def allows_null(schema) -> bool:
+        if not isinstance(schema, dict):
+            return False
+        schema_type = schema.get("type")
+        if schema_type == "null":
+            return True
+        if isinstance(schema_type, list) and "null" in schema_type:
+            return True
+        return any(
+            allows_null(item)
+            for key in ("anyOf", "oneOf", "allOf")
+            for item in schema.get(key, ()) or ()
+        )
+
+    dropped = tuple(sorted(
+        name for name, value in arguments.items()
+        if value is None and name not in required and not allows_null(schemas.get(name))
+    ))
+    return ({name: value for name, value in arguments.items()
+             if name not in dropped}, dropped)
+
+
 def _sanitized_catalog(episode, server: str, tools) -> list[dict]:
     denied = (set() if episode.continuation is None else
               episode.continuation.denied_resources)
@@ -450,7 +480,7 @@ def _overlay_registered_schema(registered: dict, rendered: dict) -> dict:
 
 
 def _mcptox_setup(contract_model: str, case: dict, frozen=None,
-                   plant_agent=None, ablation_mode: str = "full") -> dict:
+                   plant_agent=None) -> dict:
     server_name = case["server_name"]
     server = case["server"]
     attack_row = case.get("attack_row")
@@ -483,7 +513,7 @@ def _mcptox_setup(contract_model: str, case: dict, frozen=None,
             surface, argument_schemas=tuple(merged.items()))
     engine = Engine(
         contract_model, approval_enabled=False,
-        plant_agent=plant_agent, ablation_mode=ablation_mode)
+        plant_agent=plant_agent)
     engine.plan = EnvironmentPlan(
         frozen_manifest.id + "-" + server_name, {}, capabilities)
     validate_plan(engine.plan, f"MCPTox/{server_name}")
@@ -518,10 +548,9 @@ def _judge_mcptox(evaluator, evaluation_model: str, case: dict,
 
 def _mcptox_run(client, model, evaluator, evaluation_model,
                  contract_model, case: dict, frozen=None,
-                 plant_agent=None, ablation_mode: str = "full") -> dict:
+                 plant_agent=None) -> dict:
     setup = _mcptox_setup(
-        contract_model, case, frozen, plant_agent=plant_agent,
-        ablation_mode=ablation_mode)
+        contract_model, case, frozen, plant_agent=plant_agent)
     server_name = setup["server_name"]
     server, attack_row = setup["server"], setup["attack_row"]
     clean, attack = setup["clean"], setup["attack"]
@@ -824,7 +853,7 @@ def _msb_utility_passed(row: dict, decisions: list[dict]) -> bool:
 
 
 def _msb_setup(contract_model: str, row, frozen=None,
-               plant_agent=None, ablation_mode: str = "full") -> dict:
+               plant_agent=None, plant_cache=None) -> dict:
     tools, registrations, mapping = msb_runtime_manifest(row["legit_tool"])
     mapping = {(row["legit_tool"], name): capability
                for name, capability in mapping.items()}
@@ -856,7 +885,9 @@ def _msb_setup(contract_model: str, row, frozen=None,
     validate_registrations(registrations, f"MSB/{row['legit_tool']}")
     engine = Engine(
         contract_model, approval_enabled=False,
-        plant_agent=plant_agent, ablation_mode=ablation_mode)
+        plant_agent=plant_agent)
+    if plant_cache is not None:
+        engine._plant_cache = plant_cache
     engine.perceive(registrations)
     contract = (TaskContract.from_dict(frozen) if isinstance(frozen, dict)
                 else engine.contract(row["task"]))
@@ -870,10 +901,10 @@ def _msb_setup(contract_model: str, row, frozen=None,
 
 
 def _msb_run(client, model, contract_model, row: dict, frozen=None,
-             plant_agent=None, ablation_mode: str = "full") -> dict:
+             plant_agent=None, plant_cache=None) -> dict:
     setup = _msb_setup(contract_model, row, frozen,
                        plant_agent=plant_agent,
-                       ablation_mode=ablation_mode)
+                       plant_cache=plant_cache)
     engine, contract = setup["engine"], setup["contract"]
     episode = engine.start(contract, f"msb-mcp-itp-{row['case_id']}")
     broker = UnitBroker(episode, [{
@@ -1021,9 +1052,6 @@ def main():
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--evaluation-model", default="gpt-5.4-2026-03-05")
     parser.add_argument("--contract-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--dataset", choices=("all", "mcptox", "msb"),
                         default="all")
     parser.add_argument("--mcptox-start", type=int, default=0)
@@ -1084,7 +1112,6 @@ def main():
             "model": args.model,
             "evaluation_model": args.evaluation_model,
             "contract_model": args.contract_model,
-            "ablation_mode": args.ablation_mode,
             "protocol": mcptox_protocol_identity(),
         }
         if any(previous.get(key) != value for key, value in expected.items()):
@@ -1096,7 +1123,6 @@ def main():
                   "model": args.model,
                   "evaluation_model": args.evaluation_model,
                   "contract_model": args.contract_model,
-                  "ablation_mode": args.ablation_mode,
                   "protocol": mcptox_protocol_identity(),
                   "rows": rows,
                   "summary": _summary_by_dataset(rows)}
@@ -1156,16 +1182,14 @@ def main():
                                       case["mode"], key))
             preflight_jobs.append((key, lambda case=case:
                                    _mcptox_setup(
-                                       args.contract_model, case,
-                                       ablation_mode=args.ablation_mode)))
+                                       args.contract_model, case)))
     for case in selected_msb:
         key = _msb_contract_key(case)
         if key not in catalog["contracts"]:
             missing_contracts.append(("MSB", case["case_id"], "attack", key))
             preflight_jobs.append((key, lambda case=case:
                                    _msb_setup(
-                                       args.contract_model, case,
-                                       ablation_mode=args.ablation_mode)))
+                                       args.contract_model, case)))
     if args.frozen_contracts_only and missing_contracts:
         examples = "; ".join(
             f"{dataset}:{case_id}:{mode}:{key}"
@@ -1235,16 +1259,14 @@ def main():
                 _mcptox_run(agent_client, args.model,
                              evaluator_client, args.evaluation_model,
                              args.contract_model, case, frozen,
-                             plant_agent=shared_placement,
-                             ablation_mode=args.ablation_mode)))
+                             plant_agent=shared_placement)))
     for case in selected_msb:
         if ("MSB", case["case_id"], "attack") not in completed:
             key = _msb_contract_key(case)
             frozen = catalog["contracts"][key]["contract"]
             jobs.append((case["case_id"], lambda case=case, frozen=frozen:
                 _msb_run(agent_client, args.model, args.contract_model,
-                         case, frozen, plant_agent=shared_placement,
-                         ablation_mode=args.ablation_mode)))
+                         case, frozen, plant_agent=shared_placement)))
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = {pool.submit(run): name for name, run in jobs}
         for future in as_completed(pending):
@@ -1259,7 +1281,6 @@ def main():
               "model": args.model,
               "evaluation_model": args.evaluation_model,
               "contract_model": args.contract_model,
-              "ablation_mode": args.ablation_mode,
               "protocol": mcptox_protocol_identity(),
               "rows": rows,
               "summary": _summary_by_dataset(rows)}

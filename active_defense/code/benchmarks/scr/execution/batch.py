@@ -60,7 +60,8 @@ def _write_contract(path: Path, contracts: dict, quality: dict) -> None:
 def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
           capflow_cases=None, *, target_model=TARGET_MODEL,
           defense_model=DEFENSE_MODEL, fusion_dataset="",
-          ablation_mode="full", contract_root: Path | None = None):
+          contract_root: Path | None = None,
+          authblur_conditions=None, trustlift_conditions=None):
     fusion_cases: dict[str, set[str]] = {}
     if fusion_dataset:
         for suite in ("capflow", "authblur", "trustlift"):
@@ -83,7 +84,6 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                 "--scr-root", str(SCR), "--manifest-file", str(CAPFLOW_MANIFEST),
                 "--case", str(case), *conditions, "--target-model", target_model,
                 "--defense-model", defense_model,
-                "--ablation-mode", ablation_mode,
                 "--contract-file", str(contract), "--output", str(target)]
             if fusion_dataset:
                 command.extend(["--fusion-dataset", fusion_dataset])
@@ -99,13 +99,16 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
             target = output / "authblur" / f"case{case:03d}.json"
             contract = ((contract_root or output / "contracts") /
                         "authblur" / f"case{case:03d}.json")
+            conditions = tuple(authblur_conditions or
+                               ("level2_findings", "level3_fullauth"))
+            condition_args = [part for condition in conditions
+                              for part in ("--condition", condition)]
             command = [
                 sys.executable, "-m", "code.benchmarks.scr.execution.authblur",
                 "--scr-root", str(SCR), "--case", str(case),
                 "--model", target_model, "--defense-model", defense_model,
-                "--ablation-mode", ablation_mode,
                 "--contract-file", str(contract),
-                "--output", str(target)]
+                "--output", str(target), *condition_args]
             if fusion_dataset:
                 command.extend(["--fusion-dataset", fusion_dataset])
             yield "authblur", target, command
@@ -115,9 +118,12 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                         "SKILL.md").is_file()):
         if fusion_dataset and str(case) not in fusion_cases["trustlift"]:
             continue
+        selected_conditions = set(trustlift_conditions or ("clean", "attack"))
         for condition, case_arg, extra in (
                 ("clean", str(Path("experiment-group") / case), ["--clean-scan-only"]),
                 ("attack", case, [])):
+            if condition not in selected_conditions:
+                continue
             target = output / "trustlift" / f"{case}_{condition}.json"
             scratch = output / "work" / "trustlift" / condition / case
             command = [
@@ -126,7 +132,6 @@ def _jobs(output: Path, capflow_conditions=CAPFLOW_CONDITIONS,
                 "--condition", "control" if condition == "clean" else "attack",
                 "--scratch", str(scratch), "--model", target_model,
                 "--defense-model", defense_model,
-                "--ablation-mode", ablation_mode,
                 "--contract-file", str((contract_root or output / "contracts") /
                                        "trustlift.json"),
                 "--output", str(target), *extra]
@@ -251,9 +256,6 @@ def main() -> None:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--target-model", default=TARGET_MODEL)
     parser.add_argument("--defense-model", default=DEFENSE_MODEL)
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--frozen-contract-root", default="")
     parser.add_argument("--suite", action="append",
                         choices=("capflow", "authblur", "trustlift"))
@@ -264,6 +266,12 @@ def main() -> None:
                         help="CapFlow conditions to evaluate; repeat as needed")
     parser.add_argument("--capflow-case", action="append", type=int,
                         help="CapFlow case id to generate/evaluate; repeat as needed")
+    parser.add_argument("--authblur-condition", action="append",
+                        choices=("level2_findings", "level3_fullauth"),
+                        help="AuthBlur conditions to evaluate; repeat as needed")
+    parser.add_argument("--trustlift-condition", action="append",
+                        choices=("clean", "attack"),
+                        help="TrustLift conditions to evaluate; repeat as needed")
     parser.add_argument(
         "--fusion-dataset", default="",
         help="optional SCR fusion manifest/directory; forwarded to suite runners")
@@ -300,14 +308,25 @@ def main() -> None:
                 target_model=args.target_model,
                 defense_model=args.defense_model,
                 fusion_dataset=args.fusion_dataset,
-                ablation_mode=args.ablation_mode,
-                contract_root=contract_root)
+                contract_root=contract_root,
+                authblur_conditions=args.authblur_condition,
+                trustlift_conditions=args.trustlift_condition)
             if job[0] in suites]
 
     def run(job):
         suite, target, command = job
         if target.is_file():
-            return suite, "skip", str(target)
+            if suite != "authblur":
+                return suite, "skip", str(target)
+            existing = json.loads(target.read_text(encoding="utf-8"))
+            have = {row.get("condition") for row in existing.get("rows") or []}
+            wanted = {
+                command[index + 1]
+                for index, token in enumerate(command[:-1])
+                if token == "--condition"
+            }
+            if wanted and wanted.issubset(have):
+                return suite, "skip", str(target)
         target.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(command, cwd=REPO, check=True)
         return suite, "done", str(target)

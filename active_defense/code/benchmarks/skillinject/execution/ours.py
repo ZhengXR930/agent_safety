@@ -40,9 +40,6 @@ def main() -> None:
                         help="target agent model")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24",
                         help="contract and placement model")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--judge-model", default="gpt-5.4-2026-03-05")
     parser.add_argument("--condition", choices=("clean", "attack"),
                         default="attack")
@@ -62,8 +59,7 @@ def main() -> None:
     workspace = Path(args.sandbox).resolve()
     before = workspace_snapshot(workspace)
     runtime = SkillInjectRuntime(
-        args.sandbox, args.defense_model, target_model=args.model,
-        ablation_mode=args.ablation_mode)
+        args.sandbox, args.defense_model, target_model=args.model)
     frozen = None
     if args.contract_bundle:
         bundle = json.loads(Path(args.contract_bundle).read_text())

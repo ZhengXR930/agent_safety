@@ -25,7 +25,7 @@ class MSBAdapter(BenchmarkAdapter):
 
     def command(self, method: str, request: RunRequest) -> list[str]:
         self.require_method(method)
-        if method in {"ours", "wrap_only", "plant_only"}:
+        if method == "ours":
             command = [
                 sys.executable, "-m", "code.benchmarks.msb.execution.native",
                 "--model", request.target_model,
@@ -34,12 +34,6 @@ class MSBAdapter(BenchmarkAdapter):
                     Path(__file__).resolve().parents[3] /
                     "code/ours/contracts/msb/contracts.json"),
                 "--output", str(request.output),
-                "--ablation-mode",
-                {
-                    "ours": "full",
-                    "wrap_only": "wrap_only",
-                    "plant_only": "plant_only",
-                }[method],
             ]
             if request.defense_model:
                 command.extend(["--contract-model", request.defense_model])

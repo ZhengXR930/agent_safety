@@ -8,7 +8,7 @@ from code.core.adapter import BenchmarkAdapter
 from code.core.types import EvalCase, RunRequest
 
 
-ACTIVE_DEFENSE_METHODS = {"ours", "wrap_only", "plant_only"}
+ACTIVE_DEFENSE_METHODS = {"ours"}
 
 
 class SCRAdapter(BenchmarkAdapter):
@@ -41,14 +41,6 @@ class SCRAdapter(BenchmarkAdapter):
                        "--frozen-contract-root",
                        str(Path(__file__).resolve().parents[3] /
                            "code/ours/contracts/scr")]
-            command.extend([
-                "--ablation-mode",
-                {
-                    "ours": "full",
-                    "wrap_only": "wrap_only",
-                    "plant_only": "plant_only",
-                }[method],
-            ])
             if request.defense_model:
                 command.extend(["--defense-model", request.defense_model])
         else:

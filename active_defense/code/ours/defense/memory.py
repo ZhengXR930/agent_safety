@@ -66,6 +66,34 @@ RUNTIME_CONTEXT_SOURCE = SourceSurface(
 )
 
 
+def _schema_allows_null(schema: dict) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    raw_type = schema.get("type")
+    if raw_type == "null":
+        return True
+    if isinstance(raw_type, list) and "null" in raw_type:
+        return True
+    return any(
+        _schema_allows_null(item)
+        for item in (schema.get("anyOf") or schema.get("oneOf") or ())
+        if isinstance(item, dict))
+
+
+def _argument_schema_with_operator_default(
+        name: str, schema: dict, required: set[str]) -> dict:
+    schema = dict(schema)
+    if (name not in required and "default" not in schema and
+            _schema_allows_null(schema)):
+        # A nullable, non-required tool argument has an operator-defined
+        # omitted value of None.  Treating an explicit None the same way keeps
+        # patch-style updates from needing semantic authority for fields that
+        # the native boundary will not modify.  Any non-None value still goes
+        # through the ordinary Contract/Binding proof.
+        schema["default"] = None
+    return schema
+
+
 @dataclass(frozen=True)
 class CapabilitySurface:
     name: str
@@ -123,6 +151,7 @@ class CapabilitySurface:
         if required is None:
             raise ValueError(
                 f"capability {value.get('name', '')!r} lacks required arguments")
+        required_set = set(map(str, required or ()))
         argument_types = value.get("argument_types") or {}
         output_types = value.get("output_types") or {}
         if not isinstance(argument_types, dict):
@@ -151,7 +180,8 @@ class CapabilitySurface:
                    argument_types,
                    output_types,
                    None if output_schema is None else dict(output_schema),
-                   tuple((str(name), dict(schema))
+                   tuple((str(name), _argument_schema_with_operator_default(
+                             str(name), schema, required_set))
                          for name, schema in argument_schemas.items()
                          if str(name) in set(map(str, arguments or ())) and
                          isinstance(schema, dict)),
@@ -390,10 +420,36 @@ def canonical_schema_scalar(schema, value):
     return candidate if _enum_allows(schema, candidate) else value
 
 
+def canonical_argument_value(surface, argument: str, value):
+    """Return the trusted-schema canonical value used for stable identity.
+
+    This is narrower than semantic equality: only lossless scalar coercions
+    and an operator-declared URL canonicalization may change the value. Code,
+    path, and identity roles remain byte-exact.
+    """
+    schema = surface.argument_schema(argument) if surface is not None else None
+    kind = surface.argument_type(argument) if surface is not None else ""
+    if (isinstance(schema, dict) and
+            (kind in {"code", "path", "identity"} or
+             str(kind).startswith("code/"))):
+        schema = dict(schema)
+        schema["x-scalar-coercion"] = False
+    canonical = canonical_schema_scalar(schema, value)
+    if (isinstance(schema, dict) and
+            schema.get("x-canonicalization") == "url-default-https"):
+        return _canonical_url(canonical)
+    return canonical
+
+
 def schema_values_equal(schema, left, right) -> bool:
     """Compare only equivalences explicitly enabled by an argument schema."""
     if type(left) is type(right) and left == right:
         return True
+    if isinstance(schema, dict):
+        for branch in (schema.get("anyOf") or schema.get("oneOf") or ()):
+            if isinstance(branch, dict) and schema_values_equal(
+                    branch, left, right):
+                return True
     canonical_left = canonical_schema_scalar(schema, left)
     canonical_right = canonical_schema_scalar(schema, right)
     if (type(canonical_left) is type(canonical_right) and

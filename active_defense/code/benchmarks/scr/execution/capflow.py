@@ -151,9 +151,6 @@ def main() -> None:
                         choices=["A_only", "B_only", "A+B_neutral", "A+B_explicit"])
     parser.add_argument("--target-model", default="deepseek-chat")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--contract-file")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
@@ -187,8 +184,7 @@ def main() -> None:
             runtime = SkillRuntime(
                 skills_dir, args.defense_model,
                 capability_manifest, target_model=args.target_model,
-                active_skills=active_skills, workspace_root=case_dir,
-                ablation_mode=args.ablation_mode)
+                active_skills=active_skills, workspace_root=case_dir)
             rows.append(_one(runtime, module, condition, args.case,
                              active_manifest, contracts))
     output = Path(args.output)

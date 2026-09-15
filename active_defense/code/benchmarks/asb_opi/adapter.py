@@ -44,7 +44,7 @@ class ASBOPIAdapter(BenchmarkAdapter):
         ]
         if request.resume:
             command.append("--resume")
-        if method in {"ours", "wrap_only", "plant_only"}:
+        if method == "ours":
             command.extend([
                 "--contract-cache-root",
                 str(FROZEN_CONTRACT_CACHE_ROOT),

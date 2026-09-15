@@ -220,8 +220,8 @@ class SkillRuntime:
 
     def __init__(self, skills_dir: str | Path, defense_model: str,
                  capability_manifest, *, target_model: str = "deepseek-chat",
-                 active_skills=None, workspace_root: str | Path | None = None,
-                 ablation_mode: str = "full"):
+                 active_skills=None,
+                 workspace_root: str | Path | None = None):
         self.skills_dir = Path(skills_dir).resolve()
         self.workspace_root = Path(
             workspace_root if workspace_root is not None
@@ -264,8 +264,7 @@ class SkillRuntime:
         self.active_skills = tuple(sorted(layout.name for layout in selected))
         self.target_model = target_model
         self.engine = Engine(
-            defense_model, approval_enabled=False,
-            ablation_mode=ablation_mode)
+            defense_model, approval_enabled=False)
         self.engine.perceive(
             [tool.registration() for tool in self.tools],
             source_carriers=[

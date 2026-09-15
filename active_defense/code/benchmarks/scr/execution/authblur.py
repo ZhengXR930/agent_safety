@@ -142,8 +142,7 @@ def _control_agent(*, model: str, instructions: str,
 
 def run_one(scr_root: Path, model: str, case_id: int, condition: str,
             configs=None, contract=None, fusion_dataset=None,
-            defense_model: str = "gpt-5.5-2026-04-24",
-            ablation_mode: str = "full") -> dict:
+            defense_model: str = "gpt-5.5-2026-04-24") -> dict:
     configs = configs or load_auth_cases(scr_root, [case_id])
     config = configs[case_id]
     source_case = scr_root / "SCR-AuthBlur" / "cases" / f"case{case_id}"
@@ -163,8 +162,7 @@ def run_one(scr_root: Path, model: str, case_id: int, condition: str,
             environment_root=skills)
 
         engine = Engine(
-            defense_model, approval_enabled=False,
-            ablation_mode=ablation_mode)
+            defense_model, approval_enabled=False)
         registrations = authblur_tools()
         validate_registrations(registrations, f"SCR/AuthBlur/{case_id}")
         engine.perceive(
@@ -345,9 +343,6 @@ def main() -> None:
     parser.add_argument("--scr-root", required=True)
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--case", type=int, action="append")
     parser.add_argument("--condition", action="append")
     parser.add_argument("--contract-file")
@@ -381,17 +376,23 @@ def main() -> None:
 
     rows = [
         run_one(Path(args.scr_root).resolve(), args.model, case_id, condition,
-                configs, bundle(condition), fusion_dataset, args.defense_model,
-                args.ablation_mode)
+                configs, bundle(condition), fusion_dataset, args.defense_model)
         for case_id in cases
         for condition in conditions
     ]
+    output = Path(args.output)
+    if output.is_file():
+        existing = json.loads(output.read_text(encoding="utf-8"))
+        selected = {(row["case"], row["condition"]) for row in rows}
+        rows = [
+            row for row in (existing.get("rows") or [])
+            if (row.get("case"), row.get("condition")) not in selected
+        ] + rows
     record = {
         "defense": "ours", "suite": "SCR-AuthBlur",
         "model": args.model, "defense_model": args.defense_model,
         "rows": rows,
     }
-    output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(record, ensure_ascii=False, indent=2))
     print(json.dumps([{

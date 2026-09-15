@@ -8,7 +8,7 @@ from code.core.adapter import BenchmarkAdapter
 from code.core.types import EvalCase, RunRequest
 
 
-ACTIVE_DEFENSE_METHODS = {"ours", "wrap_only", "plant_only"}
+ACTIVE_DEFENSE_METHODS = {"ours"}
 
 
 class SkillInjectAdapter(BenchmarkAdapter):
@@ -37,14 +37,6 @@ class SkillInjectAdapter(BenchmarkAdapter):
         if method in ACTIVE_DEFENSE_METHODS:
             module = "code.benchmarks.skillinject.execution.batch"
             command = [sys.executable, "-m", module, *common]
-            command.extend([
-                "--ablation-mode",
-                {
-                    "ours": "full",
-                    "wrap_only": "wrap_only",
-                    "plant_only": "plant_only",
-                }[method],
-            ])
             if request.defense_model:
                 command.extend(["--defense-model", request.defense_model])
             command.extend([

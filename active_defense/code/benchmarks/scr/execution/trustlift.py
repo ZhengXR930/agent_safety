@@ -309,16 +309,14 @@ class TrustLiftRuntime:
     def __init__(self, case_dir, scratch, defense_model: str, *,
                  target_model: str = "deepseek-chat",
                  fusion_dataset: dict | None = None,
-                 registry_carrier: bool = True,
-                 clean_scan_only: bool = False,
-                 ablation_mode: str = "full"):
+                 clean_scan_only: bool = False):
         self.case = Case.prepare(case_dir, scratch)
         if clean_scan_only:
             _make_scan_only_clean(self.case.skill_dir)
         self.fusion_overlay = overlay_trustlift(
             self.case.workspace, fusion_dataset or {}, self.case.target_skill)
         self.target_model = target_model
-        self.registry_carrier = bool(registry_carrier and not clean_scan_only)
+        self.registry_carrier = not clean_scan_only
         available = {
             path.stem for path in
             (self.case.skill_dir / "scripts").glob("*.py")}
@@ -341,8 +339,7 @@ class TrustLiftRuntime:
             self.registry_carrier_spec.card
             if self.registry_carrier_spec is not None else None)
         self.engine = Engine(
-            defense_model, approval_enabled=False,
-            ablation_mode=ablation_mode)
+            defense_model, approval_enabled=False)
         registrations = [
             {"name": tool["name"], "description": tool["description"],
              "inputSchema": tool["inputSchema"],
@@ -641,18 +638,6 @@ def main() -> None:
                         help="trusted user task; the default authorizes scanning only")
     parser.add_argument("--model", default="deepseek-chat")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
-    carrier = parser.add_mutually_exclusive_group()
-    carrier.add_argument(
-        "--registry-carrier", action="store_true",
-        help=("compatibility flag; SkillCard substrate candidates are enabled "
-              "by default when runtime-attested"))
-    carrier.add_argument(
-        "--no-registry-carrier", action="store_false", dest="registry_carrier",
-        help="ablation: disable runtime-attested SkillCard substrate candidates")
-    carrier.set_defaults(registry_carrier=True)
     parser.add_argument(
         "--clean-scan-only", action="store_true",
         help="derive a matched clean TrustLift scanner by removing injected install behaviour")
@@ -676,9 +661,7 @@ def main() -> None:
         case_dir, args.scratch, args.defense_model,
         target_model=args.model,
         fusion_dataset=fusion_dataset,
-        registry_carrier=bool(args.registry_carrier),
-        clean_scan_only=args.clean_scan_only,
-        ablation_mode=args.ablation_mode)
+        clean_scan_only=args.clean_scan_only)
     contract = None
     if args.contract_file:
         contract = TaskContract.from_dict(json.loads(

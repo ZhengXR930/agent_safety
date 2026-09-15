@@ -3,7 +3,7 @@ import unittest
 
 from code.ours.defense.contract import (AcquireClause, ConditionalClause,
                                     DeriveClause, EffectClause, TaskContract)
-from code.ours.defense.engine import Episode
+from code.ours.defense.engine import Engine, Episode
 from code.ours.defense.memory import CapabilitySurface
 from code.ours.defense.resolver import LazyResolver
 from code.benchmarks.agentdojo.runtime import _result_value, _tool_view
@@ -19,6 +19,18 @@ def _travel_like_contract():
                           ("c0.hotels", "c1.ratings"), "chosen"),
         EffectClause("", "book it", "book", {"hotel": {"from": "c2.chosen"}}),
     ])
+
+
+class EngineConfigurationTests(unittest.TestCase):
+    def test_latest_engine_enables_gates_and_continuation(self):
+        engine = Engine(max_replans=3)
+        self.assertTrue(engine.wrap_enabled)
+        self.assertTrue(engine.plant_enabled)
+        self.assertTrue(engine.continuation_enabled)
+        self.assertEqual(3, engine.max_replans)
+
+        episode = engine.start(_travel_like_contract())
+        self.assertIsNotNone(episode.continuation)
 
 
 class HappyPathTests(unittest.TestCase):

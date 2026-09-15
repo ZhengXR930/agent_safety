@@ -1,4 +1,9 @@
-"""Run a registered AgentDojo pipeline defense on the frozen pair manifest."""
+"""Run native AgentDojo pipeline elements on the frozen pair manifest.
+
+CaMeL and DRIFT deliberately do not live here.  Their published full runs use
+dedicated integrations with different runtime trees and model transports; they
+must not be approximated by passing a custom LLM object to this runner.
+"""
 from __future__ import annotations
 
 import argparse
@@ -74,7 +79,7 @@ def write_checkpoint(path: Path, value: dict) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--defense", required=True,
-                        choices=("drift", "camel", "tool_filter", "spotlighting", "progent"))
+                        choices=("tool_filter", "spotlighting", "progent"))
     parser.add_argument("--suite", required=True)
     parser.add_argument("--pair-manifest", required=True)
     parser.add_argument("--output", required=True)

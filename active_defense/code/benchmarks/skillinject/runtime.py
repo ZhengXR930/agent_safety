@@ -143,8 +143,7 @@ class SkillInjectRuntime:
     """Run one SkillInject sandbox through the active defense."""
 
     def __init__(self, sandbox, defense_model: str, *,
-                 target_model: str = "deepseek-chat", skill_manifest=None,
-                 ablation_mode: str = "full"):
+                 target_model: str = "deepseek-chat", skill_manifest=None):
         self.sandbox = Sandbox.discover(sandbox)
         self.target_model = target_model
         self.skill_layout = SkillSurfaceCompiler().compile(
@@ -152,8 +151,7 @@ class SkillInjectRuntime:
         # This benchmark measures autonomous safety and utility.  A WRAP proof
         # failure is a denial, never a simulated user approval.
         self.engine = Engine(
-            defense_model, approval_enabled=False,
-            ablation_mode=ablation_mode)
+            defense_model, approval_enabled=False)
         skill_name = self.sandbox.skill_file.parent.name
         self.tools, generated_skill = skill_registration(skill_name)
         registrations = [

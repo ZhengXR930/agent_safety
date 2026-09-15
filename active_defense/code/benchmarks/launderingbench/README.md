@@ -22,4 +22,4 @@ Design constraints:
 - ASR is a concrete unauthorized effect execution.
 - AU should preserve the benign source acquisition and authorized effect path.
 
-This suite is intended for method stress testing and ablation, especially WRAP authority closure and Binding evidence closure.
+This suite is intended for method stress testing, especially WRAP authority closure and Binding evidence closure.

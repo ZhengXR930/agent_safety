@@ -12,7 +12,9 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from code.ours.defense.contract import DeriveClause, EffectClause
+from code.ours.defense.contract import (AcquireClause, ConditionalClause,
+                                        DeriveClause, EffectClause,
+                                        spec_sources)
 from code.ours.defense.continuation import (REPAIR, REPLAN,
                                        ContinuationController)
 from code.ours.defense.receipt_binding import bind_acquire, bind_effect_return
@@ -41,6 +43,9 @@ class Decision:
     continuation_id: str = ""
     continuation: dict = field(default_factory=dict)
     authorized_arguments: dict = field(default_factory=dict)
+    # Internal WRAP witness used to retire exactly one Contract obligation
+    # after the native invocation succeeds.
+    effect_clause_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -173,7 +178,8 @@ class Episode:
         self.approval_enabled = bool(approval_enabled)
         self.continuation = (ContinuationController(
             contract, max_replans=max_replans,
-            explanation_agent=continuation_explanation_agent)
+            explanation_agent=continuation_explanation_agent,
+            capabilities=self.capabilities)
             if continuation_enabled else None)
         self._plant_scopes: dict[str, dict] = {}
         # Non-Receipt carriers (Skill prose, MCP resources) are immutable for
@@ -210,6 +216,51 @@ class Episode:
         # keeps untrusted prose visible/plantable without rewriting the handle.
         self._identity_handles: dict[str, dict] = {}
         self._identity_views: dict[str, dict] = {}
+
+    def _ref_reaches_quantified_clause(self, ref: str, seen=None) -> bool:
+        """Whether a Contract output reference ranges over a finite collection.
+
+        A single Effect clause may authorize multiple native invocations when
+        its argument is drawn from a quantified Acquire/Derive or a closed
+        Conditional over such quantified facts. Clause-level retirement is only
+        valid for scalar, single-obligation Effects.
+        """
+        if seen is None:
+            seen = set()
+        ref = str(ref)
+        if ref in seen:
+            return False
+        seen.add(ref)
+        clause = next(
+            (item for item in self.contract.clauses
+             if getattr(item, "output_ref", None) == ref),
+            None)
+        if clause is None:
+            return False
+        if isinstance(clause, (AcquireClause, DeriveClause)) and clause.quantified:
+            return True
+        if isinstance(clause, ConditionalClause):
+            sources = tuple(str(item) for item in clause.operand_refs)
+        else:
+            sources = tuple(str(item) for item in getattr(clause, "sources", ()))
+        return any(
+            self._ref_reaches_quantified_clause(source, seen)
+            for source in sources
+            if isinstance(source, str) and "." in source)
+
+    def _effect_clause_has_quantified_domain(self, clause_id: str) -> bool:
+        clause_id = str(clause_id or "")
+        for clause in self.contract.clauses:
+            if not (isinstance(clause, EffectClause) and clause.id == clause_id):
+                continue
+            sources = [
+                source
+                for spec in clause.effect_arguments.values()
+                for source in spec_sources(spec)
+            ]
+            return any(self._ref_reaches_quantified_clause(source)
+                       for source in sources)
+        return False
 
     def extend_contract(self, contract) -> None:
         """Advance one episode after a new trusted user turn arrives.
@@ -616,12 +667,12 @@ class Episode:
             return CarrierView(value, receipts, {
                 "source": str(source),
                 "placements": [],
-                "ablation": "plant_disabled",
+                "policy": "plant_disabled",
             } if not receipts else {
                 "source": str(source),
                 "placements": [],
                 "basis_ids": [item.id for item in receipts],
-                "ablation": "plant_disabled",
+                "policy": "plant_disabled",
             })
         self.plant.exposed += 1
         modes = tuple(dict.fromkeys(map(str, modes or ())))
@@ -707,7 +758,7 @@ class Episode:
         Every adapter — tool, MCP or skill — reports its boundaries here.
         """
         if not self.plant_enabled:
-            return Decision("pass", "PLANT disabled by ablation")
+            return Decision("pass", "PLANT disabled")
         envelope = (value if isinstance(value, EffectEnvelope)
                     else self.envelope(value, proof_refs))
         selected = frozenset(map(str, (*tuple(identities or ()), actor)))
@@ -762,7 +813,8 @@ class Episode:
             decision.route, decision.reason, decision.refs,
             decision.commitments, decision.detections,
             decision.approval_id, dict(decision.approval),
-            plan.id, value, dict(authorized_arguments or {}))
+            plan.id, value, dict(authorized_arguments or {}),
+            decision.effect_clause_id)
 
     def _resolve_acquire_once(self, **request):
         """Cache one semantic choice for an identical observation mapping."""
@@ -870,12 +922,20 @@ class Episode:
             name: authority_atoms(
                 arguments.get(name), surface.authority_grammars(name))
             for name in content if name in arguments}
-        semantic, delegated, _placements = self._resolve_proposal_bindings(
+        proofs = self._resolve_proposal_bindings(
             action, arguments, surface, use_agent=False)
+        defaults = {
+            name: schema["default"]
+            for name, schema in (getattr(surface, "argument_schemas", ()) or ())
+            if isinstance(schema, dict) and "default" in schema}
         verdict = check_effect(
             self.state, self.contract, action, arguments,
             required=required, content=content, content_atoms=atoms,
-            delegated_proofs=delegated, semantic_proofs=semantic,
+            delegated_proofs=proofs.delegated,
+            exact_proofs=proofs.exact,
+            grounded_proofs=proofs.grounded,
+            semantic_proofs=proofs.semantic,
+            defaults=defaults,
             exact_only=(() if self.continuation is None else
                         self.continuation.restricted_arguments_for(
                             action, arguments)),
@@ -893,11 +953,15 @@ class Episode:
             for ref in scope.get("refs", ()):
                 receipt_digest = str(ref).split("#", 1)[0]
                 row = by_receipt.setdefault(
-                    receipt_digest, {"paths": set(), "operands": set()})
+                    receipt_digest, {"paths": set(), "operands": set(),
+                                     "replacements": set()})
                 row["paths"].update(scope.get("paths", ()))
                 operand = scope.get("operand")
                 if isinstance(operand, str) and operand:
                     row["operands"].add(operand)
+                replacement = scope.get("replacement")
+                if isinstance(replacement, str) and replacement:
+                    row["replacements"].add(replacement)
 
         replaced = set()
         for receipt_digest, row in by_receipt.items():
@@ -910,7 +974,15 @@ class Episode:
             if sanitized == receipt.value:
                 self.state.invalidate_receipts((receipt_digest,))
             else:
-                self.state.replace_receipt(receipt_digest, sanitized)
+                replacement = self.state.replace_receipt(
+                    receipt_digest, sanitized)
+                if self.continuation is not None and replacement is not None:
+                    view = self.continuation._receipt_views.get(receipt_digest)
+                    if view is not None:
+                        self.continuation.record_receipt_view(
+                            replacement,
+                            _redact_marker(
+                                view, row["paths"], row["replacements"]))
             replaced.add(receipt_digest)
 
         # If the adapter could identify only a receipt root, conservatively
@@ -978,6 +1050,7 @@ class Episode:
 
     def effect_succeeded(
         self, action: str, arguments: dict, *, verified: bool = False,
+        invocation_id: str = "", clause_id: str = "",
     ) -> None:
         """Record native execution without equating it to task completion.
 
@@ -987,7 +1060,8 @@ class Episode:
         """
         if self.continuation is not None:
             self.continuation.record_effect(
-                action, arguments, verified=verified)
+                action, arguments, verified=verified,
+                invocation_id=invocation_id, clause_id=clause_id)
 
     def _approval_scope(self, action: str, arguments: dict, required,
                         surface) -> str:
@@ -1115,6 +1189,11 @@ class Episode:
         # A non-gating detection still happened here; carry it through every
         # later verdict so a measurable signal is never lost to the route.
         seen = commitment.detections
+        if (self.continuation is not None and
+                self.continuation.effect_already_committed(
+                    self.state, str(action), arguments)):
+            return Decision(
+                "deny", "effect-already-committed", detections=seen)
         if not self.wrap_enabled:
             return Decision(
                 "pass", "WRAP disabled after clean PLANT commitment",
@@ -1145,8 +1224,9 @@ class Episode:
         verdict = self._verdict_memo.get(memo_key)
         if verdict is None:
             self._reconcile()
-            semantic_proofs, delegated_proofs, _placements = (
-                self._resolve_proposal_bindings(str(action), arguments, surface))
+            proofs = self._resolve_proposal_bindings(
+                str(action), arguments, surface)
+            exact_proofs = dict(proofs.exact)
             if authority:
                 # A trusted adapter may declare that this Root Effect is conferred
                 # by cited, runtime-issued granting premises. Those receipts—not a
@@ -1160,7 +1240,7 @@ class Episode:
                     for name, spec in clause.effect_arguments.items():
                         if (name in arguments and isinstance(spec, dict) and
                                 set(spec) == {"from"}):
-                            semantic_proofs.setdefault(
+                            exact_proofs.setdefault(
                                 (clause.id, name), authority_refs)
             content = frozenset(
                 name for name in (getattr(surface, "arguments", ()) or ())
@@ -1177,19 +1257,30 @@ class Episode:
             verdict = check_effect(
                 self.state, self.contract, str(action), arguments,
                 required=required, content=content,
-                content_atoms=atoms, delegated_proofs=delegated_proofs,
-                semantic_proofs=semantic_proofs, defaults=defaults,
+                content_atoms=atoms, delegated_proofs=proofs.delegated,
+                exact_proofs=exact_proofs,
+                grounded_proofs=proofs.grounded,
+                semantic_proofs=proofs.semantic, defaults=defaults,
                 exact_only=restricted,
                 equal=lambda name, left, right: argument_values_equal(
                     surface, name, left, right))
             self._verdict_memo[memo_key] = verdict
         if verdict.ok:
+            if (self.continuation is not None and
+                    self.continuation.clause_already_committed(
+                        verdict.clause_id) and
+                    not self._effect_clause_has_quantified_domain(
+                        verdict.clause_id)):
+                return Decision(
+                    "deny", "effect-obligation-already-committed",
+                    detections=seen)
             if surface is not None and surface.committed_return:
                 key = (str(action), digest(arguments))
                 self._authorized_effect_returns.setdefault(key, []).append(
                     verdict.clause_id)
-            return Decision("pass", verdict.reason, verdict.refs,
-                            detections=seen)
+            return Decision(
+                "pass", verdict.reason, verdict.refs,
+                detections=seen, effect_clause_id=verdict.clause_id)
         failed = Decision(
             "deny", verdict.reason, verdict.refs, detections=seen)
         plan = None
@@ -1263,7 +1354,7 @@ class Episode:
         self._authorized_effect_returns.clear()
         self._identity_handles.clear()
         self._identity_views.clear()
-        return {"ablation": {
+        return {"configuration": {
                     "wrap_enabled": self.wrap_enabled,
                     "plant_enabled": self.plant_enabled,
                 },
@@ -1293,14 +1384,10 @@ class Engine:
                  approval_enabled: bool = True,
                  continuation_enabled: bool = True,
                  max_replans: int = 1,
-                 continuation_explanation_agent=None,
-                 ablation_mode: str = "full"):
+                 continuation_explanation_agent=None):
         self.model = str(model) if model else ""
-        if ablation_mode not in {"full", "wrap_only", "plant_only"}:
-            raise ValueError("ablation_mode must be full, wrap_only or plant_only")
-        self.ablation_mode = ablation_mode
-        self.wrap_enabled = ablation_mode != "plant_only"
-        self.plant_enabled = ablation_mode != "wrap_only"
+        self.wrap_enabled = True
+        self.plant_enabled = True
         self.approval_enabled = bool(approval_enabled)
         self.continuation_enabled = bool(continuation_enabled)
         self.max_replans = max(0, int(max_replans))

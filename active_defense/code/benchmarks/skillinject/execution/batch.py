@@ -91,9 +91,6 @@ def main() -> None:
         help="run only an exact idNNN_taskN pair; repeatable")
     parser.add_argument("--model", default="deepseek-v4-flash")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24")
-    parser.add_argument("--ablation-mode",
-                        choices=("full", "wrap_only", "plant_only"),
-                        default="full")
     parser.add_argument("--frozen-contract-bundle",
                         default=str(FROZEN_CONTRACT_BUNDLE))
     parser.add_argument("--frozen-contracts-only", action="store_true",
@@ -103,6 +100,9 @@ def main() -> None:
     parser.add_argument(
         "--case-timeout", type=int, default=900,
         help="wall-clock limit in seconds for one clean or attack condition")
+    parser.add_argument(
+        "--condition", action="append", choices=("clean", "attack"),
+        help="condition(s) to evaluate; repeat as needed")
     parser.add_argument("--phase", choices=("preflight", "evaluate", "all"),
                         default="all")
     args = parser.parse_args()
@@ -113,6 +113,7 @@ def main() -> None:
     out, work = Path(args.output_root), Path(args.work_root)
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
+    conditions = set(args.condition or ("clean", "attack"))
     rows = json.loads(Path(args.dataset).read_text(encoding="utf-8"))
     if args.injection_limit > 0:
         rows = rows[:args.injection_limit]
@@ -198,8 +199,7 @@ def main() -> None:
                         prefix=stem + "_contract_", dir=work) as raw:
                     sandbox = _sandbox(row, task, Path(raw) / "clean", True)
                     runtime = SkillInjectRuntime(
-                        sandbox, args.defense_model, target_model=args.model,
-                        ablation_mode=args.ablation_mode)
+                        sandbox, args.defense_model, target_model=args.model)
                     contract = runtime.engine.contract(task["prompt"])
                     quality = _inspect_contract(task["prompt"], contract)
                     representative = {
@@ -258,7 +258,8 @@ def main() -> None:
     def run_pair(row, index, task):
         stem = f"id{int(row['id']):03d}_task{index}"
         clean_out, attack_out = out / f"{stem}_clean.json", out / f"{stem}_attack.json"
-        if clean_out.is_file() and attack_out.is_file():
+        if (("clean" not in conditions or clean_out.is_file()) and
+                ("attack" not in conditions or attack_out.is_file())):
             return {"pair": stem, "status": "skip"}
         reviewed_path = _contract_path(out, stem)
         if not reviewed_path.is_file():
@@ -276,7 +277,7 @@ def main() -> None:
             bundle.write_text(json.dumps({
                 "contracts": {task["prompt"]: contract}}, ensure_ascii=False),
                 encoding="utf-8")
-            if not clean_out.is_file():
+            if "clean" in conditions and not clean_out.is_file():
                 clean_box = _sandbox(row, task, root / "clean", True)
                 _run([
                     sys.executable, "-m",
@@ -284,13 +285,12 @@ def main() -> None:
                     "--sandbox", str(clean_box), "--task", task["prompt"],
                     "--condition", "clean", "--model", args.model,
                     "--defense-model", args.defense_model,
-                    "--ablation-mode", args.ablation_mode,
                     "--judge-model", args.judge_model,
                     "--max-turns", str(args.max_turns),
                     "--contract-bundle", str(bundle),
                     "--output", str(clean_out),
                 ], args.case_timeout)
-            if not attack_out.is_file():
+            if "attack" in conditions and not attack_out.is_file():
                 attack_box = _sandbox(row, task, root / "attack", False)
                 command = [
                     sys.executable, "-m",
@@ -298,7 +298,6 @@ def main() -> None:
                     "--sandbox", str(attack_box), "--task", task["prompt"],
                     "--condition", "attack", "--model", args.model,
                     "--defense-model", args.defense_model,
-                    "--ablation-mode", args.ablation_mode,
                     "--judge-model", args.judge_model,
                     "--max-turns", str(args.max_turns),
                     "--contract-bundle", str(bundle),

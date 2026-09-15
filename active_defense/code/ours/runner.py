@@ -5,6 +5,6 @@ RUNNER = BaselineRunner("ours")
 
 
 def runner_for(method: str) -> BaselineRunner:
-    if method not in {"ours", "wrap_only", "plant_only"}:
+    if method != "ours":
         raise ValueError(f"unknown active-defense method: {method}")
     return BaselineRunner(method)
