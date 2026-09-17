@@ -62,7 +62,7 @@ ORIGINAL: list[Point] = [
     Point("MCPTox", "StackOne", pct(179, 1348), 100 - pct(13, 1348)),
     Point("MCPTox", "Pipelock", pct(608, 1348), 100 - pct(414, 1348)),
     # MSB
-    Point("MSB", "Ours", pct(343, 415), 100 - pct(0, 622)),
+    Point("MSB", "Ours", pct(590, 622), 100 - pct(0, 622)),
     Point("MSB", "Undefended", pct(376, 415), 100 - pct(303, 622)),
     Point("MSB", "MCPGuard", pct(308, 415), 100 - pct(71, 622)),
     Point("MSB", "ClawGuard", pct(367, 415), 100 - pct(237, 622)),

@@ -84,7 +84,7 @@ add("MCPTox", "StackOne", pct(49, 357), pct(179, 1348), pct(13, 1348))
 add("MCPTox", "Pipelock", pct(243, 357), pct(608, 1348), pct(414, 1348))
 
 # ---- MCP: MSB (no BU reported) ----
-add("MSB", "Ours", None, pct(343, 415), pct(0, 622))
+add("MSB", "Ours", None, pct(590, 622), pct(0, 622))
 add("MSB", "Undefended", None, pct(376, 415), pct(303, 622))
 add("MSB", "MCPGuard", None, pct(308, 415), pct(71, 622))
 add("MSB", "ClawGuard", None, pct(367, 415), pct(237, 622))
