@@ -55,7 +55,7 @@ ORIGINAL: list[Point] = [
     Point("SCR", "Undefended", pct(93 + 116 + 401, 667), 100 - pct(90 + 84 + 401, 667)),
     Point("SCR", "TaskShield", pct(75 + 115 + 315, 667), 100 - pct(63 + 82 + 315, 667)),
     # MCPTox
-    Point("MCPTox", "Ours", pct(1015, 1348), 100 - pct(0, 1348)),
+    Point("MCPTox", "Ours", pct(1018, 1348), 100 - pct(0, 1348)),
     Point("MCPTox", "Undefended", pct(556, 1348), 100 - pct(488, 1348)),
     Point("MCPTox", "MCPGuard", pct(704, 1348), 100 - pct(1, 1348)),
     Point("MCPTox", "ClawGuard", pct(618, 1348), 100 - pct(218, 1348)),

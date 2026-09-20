@@ -76,7 +76,7 @@ add("ASB-OPI", "AgentShield", pct(42, 51), pct(1252, 2040), pct(867, 2040))
 add("ASB-OPI", "TaskShield", pct(40, 51), pct(599, 2040), pct(296, 2040))
 
 # ---- MCP: MCPTox ----
-add("MCPTox", "Ours", pct(231, 357), pct(1015, 1348), pct(0, 1348))
+add("MCPTox", "Ours", pct(238, 357), pct(1018, 1348), pct(0, 1348))
 add("MCPTox", "Undefended", pct(247, 357), pct(556, 1348), pct(488, 1348))
 add("MCPTox", "MCPGuard", pct(184, 357), pct(704, 1348), pct(1, 1348))
 add("MCPTox", "ClawGuard", pct(207, 357), pct(618, 1348), pct(218, 1348))
@@ -131,7 +131,6 @@ SURFACES = [
 
 # Global schema order + colors (shared legend).
 SCHEMA_ORDER = [
-    "Ours",
     "Undefended",
     "Spotlighting",
     "Tool Filter",
@@ -146,9 +145,9 @@ SCHEMA_ORDER = [
     "StackOne",
     "Pipelock",
     "DynamicGuardian",
+    "Ours",
 ]
 COLORS = {
-    "Ours": "#b0656b",          # muted rose
     "Undefended": "#a9a9a1",     # warm grey
     "Spotlighting": "#8090a8",   # dusty blue
     "Tool Filter": "#a89878",    # taupe
@@ -163,18 +162,60 @@ COLORS = {
     "StackOne": "#a892b0",       # soft purple
     "Pipelock": "#9a9b73",       # olive
     "DynamicGuardian": "#8a8fa3",  # muted indigo
+    "Ours": "#c98787",          # light Morandi red for APEX
 }
 
 METRICS = [
-    ("Benign Utility (BU)", 0, "%"),
-    ("Attack Utility (AU)", 1, "%"),
-    ("Attack Success Rate (ASR)", 2, "%"),
+    (r"Benign Utility (BU $\uparrow$)", 0, "%"),
+    (r"Attack Utility (AU $\uparrow$)", 1, "%"),
+    (r"Attack Success Rate (ASR $\downarrow$)", 2, "%"),
 ]
+
+APEX_HATCH = "///"
+
+
+def draw_method_bar(ax, x: float, val: float, width: float,
+                    schema: str, zorder: float = 3) -> None:
+    is_ours = schema == "Ours"
+    ax.bar(
+        x, val, width=width,
+        color=COLORS[schema],
+        edgecolor="none" if is_ours else "#4f4f4f",
+        linewidth=0.0 if is_ours else 0.55,
+        hatch=None,
+        zorder=zorder,
+    )
+    if is_ours and val > 0:
+        ax.bar(
+            x, val, width=width,
+            facecolor="none",
+            edgecolor="white",
+            linewidth=0.0,
+            hatch=APEX_HATCH,
+            zorder=zorder + 0.1,
+        )
+
+
+def legend_handle(schema: str) -> Patch:
+    if schema == "Ours":
+        return Patch(
+            facecolor=COLORS[schema],
+            edgecolor="white",
+            linewidth=0.0,
+            hatch=APEX_HATCH,
+            label=legend_label(schema),
+        )
+    return Patch(
+        facecolor=COLORS[schema],
+        edgecolor="#4f4f4f",
+        linewidth=0.55,
+        label=legend_label(schema),
+    )
 
 
 def render(surfaces: list[tuple[str, list[str]]], stem: str, width: float) -> None:
     """Render one BU/AU/ASR figure for the given surface groups."""
-    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9})
+    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9, "hatch.linewidth": 0.8})
     fig, axes = plt.subplots(1, 3, figsize=(width, 3.7), constrained_layout=True)
 
     bar_w = 0.9
@@ -202,14 +243,7 @@ def render(surfaces: list[tuple[str, list[str]]], stem: str, width: float) -> No
                         used_schemas.append(s)
                     val = DATA[bench][s][midx]
                     is_ours = s == "Ours"
-                    ax.bar(
-                        x, val, width=bar_w,
-                        color=COLORS[s],
-                        edgecolor="#333333" if is_ours else "none",
-                        linewidth=1.1 if is_ours else 0.0,
-                        hatch="//" if is_ours else None,
-                        zorder=3,
-                    )
+                    draw_method_bar(ax, x, val, bar_w, s)
                     ax.text(
                         x, val + 1.2, f"{val:.0f}",
                         ha="center", va="bottom", rotation=90,
@@ -248,9 +282,7 @@ def render(surfaces: list[tuple[str, list[str]]], stem: str, width: float) -> No
                 ax.text(cx, 110, surface, ha="center", va="bottom",
                         fontsize=10, fontweight="bold", color="#333")
 
-    handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=legend_label(s))
-               for s in SCHEMA_ORDER if s in used_schemas]
+    handles = [legend_handle(s) for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=7.6, columnspacing=1.0, handlelength=1.3,
                handletextpad=0.4, bbox_to_anchor=(0.5, -0.045))
@@ -271,7 +303,7 @@ def render_grid(benches: list[str], stem: str, width: float, row_h: float) -> No
     (a)-(f); the benchmark identity is left to the caption.  Value labels are
     horizontal with two decimals.  Rows are compressed.
     """
-    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9})
+    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9, "hatch.linewidth": 0.8})
     nrows = len(benches)
     fig, axes = plt.subplots(
         nrows, 3, figsize=(width, row_h * nrows),
@@ -304,14 +336,7 @@ def render_grid(benches: list[str], stem: str, width: float, row_h: float) -> No
                     used_schemas.append(s)
                 val = DATA[bench][s][midx]
                 is_ours = s == "Ours"
-                ax.bar(
-                    xi, val, width=bar_w,
-                    color=COLORS[s],
-                    edgecolor="#333333" if is_ours else "none",
-                    linewidth=1.0 if is_ours else 0.0,
-                    hatch="//" if is_ours else None,
-                    zorder=3,
-                )
+                draw_method_bar(ax, xi, val, bar_w, s)
                 ax.text(
                     xi, val + 1.5, f"{val:.2f}",
                     ha="center", va="bottom", rotation=0,
@@ -348,9 +373,7 @@ def render_grid(benches: list[str], stem: str, width: float, row_h: float) -> No
                           color="#777", linestyle="--", linewidth=0.9)
         fig.add_artist(line)
 
-    handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=legend_label(s))
-               for s in SCHEMA_ORDER if s in used_schemas]
+    handles = [legend_handle(s) for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=FS_LEGEND, columnspacing=1.0, handlelength=1.3,
                handletextpad=0.4, bbox_to_anchor=(0.5, -0.14))
@@ -373,7 +396,7 @@ def render_surface_grid(surfaces: list[tuple[str, list[str]]], stem: str,
     small gap and the benchmark name below each cluster.  Same muted style,
     (a)-(f) subplot labels, shared legend as the Tool figure.
     """
-    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9})
+    plt.rcParams.update({"font.family": "serif", "font.serif": SERIF, "mathtext.fontset": "stix", "font.size": 9, "hatch.linewidth": 0.8})
     nrows = len(surfaces)
     fig, axes = plt.subplots(
         nrows, 3, figsize=(width, row_h * nrows), constrained_layout=True,
@@ -424,14 +447,7 @@ def render_surface_grid(surfaces: list[tuple[str, list[str]]], stem: str,
                         used_schemas.append(s)
                     val = DATA[bench][s][midx]
                     is_ours = s == "Ours"
-                    ax.bar(
-                        x, val, width=bar_w,
-                        color=COLORS[s],
-                        edgecolor="#333333" if is_ours else "none",
-                        linewidth=1.0 if is_ours else 0.0,
-                        hatch="//" if is_ours else None,
-                        zorder=3,
-                    )
+                    draw_method_bar(ax, x, val, bar_w, s)
                     ax.text(
                         x, val + 1.5, f"{val:.2f}",
                         ha="center", va="bottom", rotation=0,
@@ -475,9 +491,7 @@ def render_surface_grid(surfaces: list[tuple[str, list[str]]], stem: str,
                           color="#777", linestyle="--", linewidth=0.9)
         fig.add_artist(line)
 
-    handles = [Patch(facecolor=COLORS[s], edgecolor="#333333" if s == "Ours" else "none",
-                     hatch="//" if s == "Ours" else None, label=legend_label(s))
-               for s in SCHEMA_ORDER if s in used_schemas]
+    handles = [legend_handle(s) for s in SCHEMA_ORDER if s in used_schemas]
     fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False,
                fontsize=FS_LEGEND, columnspacing=1.0, handlelength=1.3,
                handletextpad=0.4, bbox_to_anchor=(0.5, -0.13))

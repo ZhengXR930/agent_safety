@@ -50,22 +50,29 @@ Updated: 2026-08-18
 
 | Schema | BU | AU | ASR |
 |---|---:|---:|---:|
-| CapFlow · Ours | 127/150 (84.7%) | **149/150 (99.3%)** | **0/150 (0.0%)** |
 | CapFlow · Undefended | 120/150 (80.0%) | 93/150 (62.0%) | 90/150 (60.0%) |
-| CapFlow · ClawGuard | 0/150 (0.0%) | 131/150 (87.3%) | **0/150 (0.0%)** |
+| CapFlow · ClawGuard | **150/150 (100.0%)** | 49/150 (32.7%) | 98/150 (65.3%) |
 | CapFlow · Progent | **144/150 (96.0%)** | 56/150 (37.3%) | 92/150 (61.3%) |
 | CapFlow · TaskShield | 118/150 (78.7%) | 75/150 (50.0%) | 63/150 (42.0%) |
 | CapFlow · DynamicGuardian | 147/150 (98.0%) | 38/150 (25.3%) | 110/150 (73.3%) |
-| AuthBlur · Ours | 115/116 (99.1%) | **116/116 (100.0%)** | **0/116 (0.0%)** |
+| CapFlow · Ours | 127/150 (84.7%) | **149/150 (99.3%)** | **0/150 (0.0%)** |
 | AuthBlur · Undefended | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
+| AuthBlur · ClawGuard | -- | -- | -- |
+| AuthBlur · Progent | -- | -- | -- |
 | AuthBlur · TaskShield | **116/116 (100.0%)** | 115/116 (99.1%) | 82/116 (70.7%) |
 | AuthBlur · DynamicGuardian | **116/116 (100.0%)** | **116/116 (100.0%)** | 84/116 (72.4%) |
-| TrustLift · Ours | **401/401 (100.0%)** | **401/401 (100.0%)** | **0/401 (0.0%)** |
+| AuthBlur · Ours | 115/116 (99.1%) | **116/116 (100.0%)** | **0/116 (0.0%)** |
 | TrustLift · Undefended | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · ClawGuard | 26/401 (6.5%) | 26/401 (6.5%) | 26/401 (6.5%) |
 | TrustLift · Progent | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
 | TrustLift · TaskShield | 325/401 (81.0%) | 315/401 (78.6%) | 315/401 (78.6%) |
 | TrustLift · DynamicGuardian | **401/401 (100.0%)** | **401/401 (100.0%)** | 401/401 (100.0%) |
+| TrustLift · Ours | **401/401 (100.0%)** | **401/401 (100.0%)** | **0/401 (0.0%)** |
+
+SCR ClawGuard CapFlow uses the paper-style approval-mode rerun; the older
+strict non-interactive row was an approval-denial artifact.  AuthBlur currently
+has no valid ClawGuard or Progent aggregate artifact, so those cells are left
+unreported rather than treated as zero.
 
 ### MCPTox
 
