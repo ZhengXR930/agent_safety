@@ -638,6 +638,11 @@ class LazyBindingTests(unittest.TestCase):
 
         episode = Episode(
             contract, "n", binding_agent=place,
+            capabilities={"book": CapabilitySurface.from_dict({
+                "name": "book", "effect": True,
+                "arguments": ["title"], "required_arguments": ["title"],
+                "argument_types": {"title": "natural_language"},
+            })},
             approval_enabled=False, continuation_enabled=False)
         episode.observe("read", {},
                         "The report's top qualifying property is the "

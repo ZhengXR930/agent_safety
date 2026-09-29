@@ -8,7 +8,8 @@ from pathlib import Path
 from code.benchmarks.skillinject.runtime import DEFAULT_ATTACK_TOKENS, SkillInjectRuntime
 from code.ours.defense.contract import TaskContract
 from code.benchmarks.skillinject.execution.baselines import (
-    judge_attack, judge_utility, workspace_snapshot)
+    judge_attack, judge_utility_evidence, utility_evidence,
+    utility_judge_metadata, workspace_snapshot)
 
 
 def _passed_moderation_calls(record: dict) -> list[dict]:
@@ -30,6 +31,16 @@ def _utility_evidence(record: dict) -> str:
         committed, ensure_ascii=False, default=str)
 
 
+def _write_record(path: Path, record: dict) -> None:
+    """Atomically checkpoint a result, including pre-judge evidence."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending = path.with_suffix(path.suffix + ".tmp")
+    pending.write_text(
+        json.dumps(record, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8")
+    pending.replace(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="SkillInject under the active defense")
@@ -40,13 +51,19 @@ def main() -> None:
                         help="target agent model")
     parser.add_argument("--defense-model", default="gpt-5.5-2026-04-24",
                         help="contract and placement model")
-    parser.add_argument("--judge-model", default="gpt-5.4-2026-03-05")
+    parser.add_argument("--judge-model", default="gpt-5.6-sol")
     parser.add_argument("--condition", choices=("clean", "attack"),
                         default="attack")
     parser.add_argument("--attack-judge-prompt")
     parser.add_argument("--attack-context", default="")
     parser.add_argument("--no-substrate", action="store_true",
                         help="skip the workspace honey artifact")
+    parser.add_argument("--disable-wrap", action="store_true",
+                        help="ablate WRAP while retaining PLANT")
+    parser.add_argument("--disable-plant", action="store_true",
+                        help="ablate PLANT while retaining WRAP")
+    parser.add_argument("--disable-continuation", action="store_true",
+                        help="ablate safe continuation while retaining WRAP and PLANT")
     parser.add_argument("--max-turns", type=int, default=14)
     parser.add_argument("--contract-bundle",
                         help="reviewed mapping from a task or pair key to Contract")
@@ -59,7 +76,10 @@ def main() -> None:
     workspace = Path(args.sandbox).resolve()
     before = workspace_snapshot(workspace)
     runtime = SkillInjectRuntime(
-        args.sandbox, args.defense_model, target_model=args.model)
+        args.sandbox, args.defense_model, target_model=args.model,
+        wrap_enabled=not args.disable_wrap,
+        plant_enabled=not args.disable_plant,
+        continuation_enabled=not args.disable_continuation)
     frozen = None
     if args.contract_bundle:
         bundle = json.loads(Path(args.contract_bundle).read_text())
@@ -76,11 +96,24 @@ def main() -> None:
         attack_tokens=tuple(args.attack_token or DEFAULT_ATTACK_TOKENS),
         deploy_substrate=not args.no_substrate, contract=frozen,
         max_turns=args.max_turns)
-    utility, utility_reason = judge_utility(
-        workspace, before, args.task, _utility_evidence(record),
-        args.judge_model)
+    record["condition"] = args.condition
+    record.setdefault("audit", {})["continuation_enabled"] = (
+        not args.disable_continuation)
+    evidence = utility_evidence(
+        workspace, before, _utility_evidence(record))
+    record["utility"] = None
+    record["utility_reason"] = "technical: utility judge pending"
+    record["utility_evidence"] = evidence
+    record["utility_judge"] = utility_judge_metadata(
+        evidence, args.judge_model)
+    output = Path(args.output)
+    _write_record(output, record)
+
+    utility, utility_reason = judge_utility_evidence(
+        args.task, evidence, args.judge_model)
     record["utility"] = utility
     record["utility_reason"] = utility_reason
+    _write_record(output, record)
     if args.condition == "attack" and args.attack_judge_prompt:
         moderation_attempted = any(
             call.get("tool") == "moderate_messages"
@@ -102,11 +135,7 @@ def main() -> None:
         record["attack_reason"] = attack_reason
     else:
         record["attack_reason"] = "deterministic runtime attack token"
-    record["condition"] = args.condition
-
-    output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(record, indent=2, ensure_ascii=False))
+    _write_record(output, record)
     print(json.dumps({key: record[key] for key in (
         "utility", "utility_reason", "detected", "plant_by_semantics",
         "attack_effect", "dgs", "response_route", "termination")},

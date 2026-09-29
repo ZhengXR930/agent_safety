@@ -11,7 +11,6 @@ All backends are API-only (no local GPU).
 
 from __future__ import annotations
 
-from functools import lru_cache
 import os
 import threading
 import time
@@ -316,6 +315,11 @@ OPENAI_COMPATIBLE_GATEWAYS = {
     "gpt-5.6-sol": ("TOTOKENS_API_URL", "TOTOKENS_API_KEY", "https://totokens.cc"),
 }
 
+# ToTokens exposes these logical models through the Responses API rather than
+# Chat Completions.  They are currently used for offline evaluation roles; the
+# task and defense Agents keep their independently selected transports.
+TOTOKENS_RESPONSES_MODELS = {"gpt-5.4", "gpt-5.6-sol"}
+
 
 # Models whose endpoint rejects an explicit `temperature` param.
 _NO_TEMP = {"kimi-k2.6", "gpt-5.6-sol", "gpt-5.5-2026-04-24", "gpt-5.4-2026-03-05"}
@@ -455,6 +459,25 @@ def chat(
 
     The memory-backed defender roles (Camoufleur / Distinguisher) that need env KNOWLEDGE — not
     filesystem EXPLORATION — answer through this instead of a `claude` subprocess cold-start."""
+    if model in TOTOKENS_RESPONSES_MODELS:
+        request = {
+            "model": model,
+            "input": prompt,
+            "store": False,
+            "reasoning": {
+                "effort": (
+                    os.environ.get("TOTOKENS_REASONING_EFFORT") or "xhigh"
+                )
+            },
+        }
+        if max_tokens is not None:
+            request["max_output_tokens"] = max_tokens
+        response = client.responses.create(**request)
+        text = getattr(response, "output_text", None)
+        if text is None:
+            raise RuntimeError("ToTokens Responses result has no output_text")
+        return str(text).strip()
+
     kw = {"model": model, "messages": [{"role": "user", "content": prompt}]}
     if model not in _NO_TEMP:
         kw["temperature"] = 0.0
@@ -518,6 +541,20 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
     - Else -> legacy gpt_openapi OpenAI client.
     Use the returned client with `client.chat.completions.create(model=model, ...)`.
     """
+    if model in TOTOKENS_RESPONSES_MODELS:
+        key = read_config_key("TOTOKENS_API_KEY", root=root)
+        if not key:
+            raise RuntimeError("Missing TOTOKENS_API_KEY (environment or config.txt).")
+        url = (os.environ.get("TOTOKENS_API_URL") or
+               read_config_key("TOTOKENS_API_URL", root=root) or
+               "https://totokens.cc")
+        headers = _openai_gateway_headers("gpt-5.6-sol", root=root)
+        return OpenAI(
+            base_url=url,
+            api_key=key,
+            default_headers=headers,
+            timeout=90.0,
+        )
     if model in DEEPSEEK_MODELS:
         key = read_config_key("DEEPSEEK_API_KEY", root=root)
         if not key:
@@ -556,13 +593,17 @@ def client_for_model(model: str, *, api_key_env: str = "OPENAI_API_KEY", root: P
             model),
         model, "gpt_openapi")
 
-@lru_cache(maxsize=16)
 def agent_sdk_model(model: str, *, api_key_env: str = "OPENAI_API_KEY",
                     root: Path | None = None):
     """Build an OpenAI Agents SDK model for any registered project backend.
 
     Defender roles use this boundary instead of issuing chat-completion calls
     themselves.  Provider credentials and transport aliases remain centralized.
+
+    Do not cache these wrappers process-wide.  They own async HTTP clients,
+    while sync Agent SDK entry points may run successive roles on distinct
+    event loops.  Reusing one cached client after its original loop closes
+    fails when the target and defender share the same backend.
     """
     from agents import OpenAIChatCompletionsModel
     from openai import AsyncAzureOpenAI, AsyncOpenAI

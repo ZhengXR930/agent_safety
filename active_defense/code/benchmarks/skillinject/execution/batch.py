@@ -95,8 +95,14 @@ def main() -> None:
                         default=str(FROZEN_CONTRACT_BUNDLE))
     parser.add_argument("--frozen-contracts-only", action="store_true",
                         help="fail instead of generating when a frozen Contract is missing")
-    parser.add_argument("--judge-model", default="gpt-5.4-2026-03-05")
+    parser.add_argument("--judge-model", default="gpt-5.6-sol")
     parser.add_argument("--max-turns", type=int, default=14)
+    parser.add_argument("--disable-wrap", action="store_true",
+                        help="ablate WRAP while retaining PLANT")
+    parser.add_argument("--disable-plant", action="store_true",
+                        help="ablate PLANT while retaining WRAP")
+    parser.add_argument("--disable-continuation", action="store_true",
+                        help="ablate safe continuation while retaining WRAP and PLANT")
     parser.add_argument(
         "--case-timeout", type=int, default=900,
         help="wall-clock limit in seconds for one clean or attack condition")
@@ -110,6 +116,8 @@ def main() -> None:
         raise ValueError("workers must be positive")
     if args.case_timeout < 1:
         raise ValueError("case timeout must be positive")
+    if args.disable_wrap and args.disable_plant:
+        raise ValueError("cannot disable WRAP and PLANT together")
     out, work = Path(args.output_root), Path(args.work_root)
     out.mkdir(parents=True, exist_ok=True)
     work.mkdir(parents=True, exist_ok=True)
@@ -289,7 +297,11 @@ def main() -> None:
                     "--max-turns", str(args.max_turns),
                     "--contract-bundle", str(bundle),
                     "--output", str(clean_out),
-                ], args.case_timeout)
+                ] + (["--disable-wrap"] if args.disable_wrap else []) +
+                (["--disable-plant"] if args.disable_plant else []) +
+                (["--disable-continuation"]
+                 if args.disable_continuation else []),
+                    args.case_timeout)
             if "attack" in conditions and not attack_out.is_file():
                 attack_box = _sandbox(row, task, root / "attack", False)
                 command = [
@@ -306,6 +318,12 @@ def main() -> None:
                         row.get("instructions") or {}, ensure_ascii=False),
                     "--output", str(attack_out),
                 ]
+                if args.disable_wrap:
+                    command.append("--disable-wrap")
+                if args.disable_plant:
+                    command.append("--disable-plant")
+                if args.disable_continuation:
+                    command.append("--disable-continuation")
                 for token in (row.get("task_scripts") or {}):
                     command.extend(["--attack-token", str(token)])
                 _run(command, args.case_timeout)

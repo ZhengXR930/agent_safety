@@ -42,8 +42,10 @@ TOOLS = [
      "outputSchema": {"type": "string"},
      "argument_types": {"path": "path", "content": "code"},
      "inputSchema": {"type": "object",
-                     "properties": {"path": {"type": "string"},
-                                    "content": {"type": "string"}},
+                     "properties": {
+                         "path": {"type": "string", "x-task-derived": True},
+                         "content": {"type": "string",
+                                     "x-task-derived": True}},
                      "required": ["path", "content"],
                      "additionalProperties": False}},
     {"name": "run_task_script", "description": (

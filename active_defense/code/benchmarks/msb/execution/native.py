@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
@@ -18,7 +19,6 @@ import shutil
 import site
 import sys
 import traceback
-import threading
 
 # The frozen MSB environment carries the benchmark's LangChain/mcp-use stack,
 # while defender roles use the repository's current OpenAI Agents SDK.  Keep
@@ -67,6 +67,7 @@ from code.benchmarks.msb.execution.attack import (  # noqa: E402
 )
 from code.core.client import langchain_usage_callback, read_config_key  # noqa: E402
 from code.ours.defense.broker import UnitBroker  # noqa: E402
+from code.ours.defense.plant_cache import ConcurrentPersistentCache  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -75,9 +76,12 @@ MSB_ROOT = AGENT_SAFETY / "benchmarks/external/MSB"
 NORMAL_TOOLS = MSB_ROOT / "data/tools/normal_tools"
 SUPPORT_TOOLS = MSB_ROOT / "data/tools/support_tools"
 ATTACK_TOOLS = MSB_ROOT / "data/tools/attack_tools"
+FROZEN_MSB_ROOT = Path(
+    "/mlx_devbox/users/zhengxinran/playground/code_zxr/agent_safety/"
+    "benchmarks/external/MSB")
 NODE_BIN = (AGENT_SAFETY / "benchmarks/external/defender/.runtime/"
             "node-v22.17.0-linux-x64/bin")
-_PLACE_CATALOG_LOCK = threading.Lock()
+_LOCAL_NORMAL_TOOLS = {"PubMed_MCP_Server", "Memory_Tool"}
 
 PUA_UNDEFINED = {
     "false_error", "simulated_user",
@@ -94,8 +98,64 @@ def _load_key() -> None:
     os.environ["DEEPSEEK_API_KEY"] = key
 
 
-def _read_servers(path: Path) -> dict:
-    return json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+def _read_servers(path: Path, *, tool_directory: Path | None = None) -> dict:
+    """Load an upstream MCP config without mutating the frozen checkout."""
+    raw = path.read_text(encoding="utf-8")
+    if tool_directory is not None:
+        raw = raw.replace(
+            "/ABSOLUTE/PATH/TO/PARENT/FOLDER/", str(tool_directory))
+    raw = raw.replace(
+        "/ABSOLUTE/PATH/TO/operation_space/information",
+        str(MSB_ROOT / "operation_space/information"))
+    raw = raw.replace(
+        "/ABSOLUTE/PATH/TO/operation_space/output",
+        str(MSB_ROOT / "operation_space/output"))
+    servers = json.loads(raw)["mcpServers"]
+    uv = Path(sys.executable).with_name("uv")
+    if not uv.is_file():
+        resolved = shutil.which("uv")
+        uv = Path(resolved) if resolved else uv
+    for config in servers.values():
+        if config.get("command") == "uv":
+            config["command"] = str(uv)
+    return servers
+
+
+def _tool_directory(row: dict) -> Path:
+    return ATTACK_TOOLS / row["agent"] / row["legit_tool"]
+
+
+def _normal_servers(row: dict) -> dict:
+    """Use benchmark-shipped local servers when Smithery requires OAuth."""
+    directory = _tool_directory(row)
+    if row["legit_tool"] in _LOCAL_NORMAL_TOOLS:
+        return _read_servers(
+            directory / "mcp_config.json", tool_directory=directory)
+    return _read_servers(
+        NORMAL_TOOLS / f"{row['legit_tool']}.json",
+        tool_directory=directory)
+
+
+def _relocate(value, source: str, target: str):
+    """Relocate environment paths while preserving frozen policy structure."""
+    if isinstance(value, str):
+        return value.replace(source, target)
+    if isinstance(value, list):
+        return [_relocate(item, source, target) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_relocate(item, source, target) for item in value)
+    if isinstance(value, dict):
+        return {key: _relocate(item, source, target)
+                for key, item in value.items()}
+    return value
+
+
+def _runtime_inputs(row: dict, frozen: dict) -> tuple[dict, dict]:
+    """Map the original experiment root to this checkout in memory only."""
+    source, target = str(FROZEN_MSB_ROOT), str(MSB_ROOT)
+    runtime_row = _relocate(deepcopy(row), source, target)
+    runtime_row["_frozen_task"] = row["task"]
+    return runtime_row, _relocate(deepcopy(frozen), source, target)
 
 
 def _server_cwd(servers: dict) -> dict:
@@ -108,6 +168,23 @@ def _server_cwd(servers: dict) -> dict:
     for config in rooted.values():
         command = str(config["command"])
         command = shutil.which(command) or command
+        environment = dict(config.get("env") or {})
+        executable = Path(command).name
+        if executable in {"npx", "npm"}:
+            # Avoid a broken/root-owned global npm cache on shared machines.
+            npm_cache = str(MSB_ROOT / ".npm-cache")
+            environment.setdefault("NPM_CONFIG_CACHE", npm_cache)
+            # Smithery spawns a nested npx process and preserves npm's
+            # canonical lower-case environment spelling.
+            environment.setdefault("npm_config_cache", npm_cache)
+        if executable == "uv":
+            # Upstream pins 3.10 in .python-version. Reuse the synchronized
+            # project environment instead of downloading another interpreter.
+            environment.setdefault("UV_PYTHON", sys.executable)
+            environment.setdefault(
+                "UV_PROJECT_ENVIRONMENT", str(ATTACK_TOOLS / ".venv"))
+        if environment:
+            config["env"] = environment
         argv = [command, *(str(arg) for arg in config.get("args") or ())]
         config["command"] = "/bin/bash"
         config["args"] = [
@@ -126,7 +203,7 @@ def _clean_config(row: dict) -> tuple[dict, dict[str, str]]:
         roles.update({name: "Filesystem_MCP_Server" for name in added})
     else:
         support = _read_servers(SUPPORT_TOOLS / "Filesystem_MCP_Server.json")
-        normal = _read_servers(NORMAL_TOOLS / f"{row['legit_tool']}.json")
+        normal = _normal_servers(row)
         servers.update(support)
         servers.update(normal)
         roles.update({name: "Filesystem_MCP_Server" for name in support})
@@ -153,7 +230,7 @@ def _attack_config(row: dict, operation: str) -> tuple[dict, dict[str, str]]:
     if attack_type not in {
             "out_of_scope_parameter", "search_term_deception",
             "tool_transfer"}:
-        added = _read_servers(NORMAL_TOOLS / f"{row['legit_tool']}.json")
+        added = _normal_servers(row)
         servers.update(added)
         roles.update({name: row["legit_tool"] for name in added})
     injected = {
@@ -165,7 +242,7 @@ def _attack_config(row: dict, operation: str) -> tuple[dict, dict[str, str]]:
     if attack_type in injected:
         path = (ATTACK_TOOLS / row["agent"] / row["legit_tool"] /
                 "mcp_config.json")
-        attack = _read_servers(path)
+        attack = _read_servers(path, tool_directory=path.parent)
         name, config = next(iter(attack.items()))
         config = json.loads(json.dumps(config))
         config["args"].extend((attack_type, attack_task, operation))
@@ -178,7 +255,7 @@ def _attack_config(row: dict, operation: str) -> tuple[dict, dict[str, str]]:
         servers[attack_name] = config
         roles[attack_name] = row["legit_tool"]
         if attack_type == "tool_transfer":
-            addition = _read_servers(path)
+            addition = _read_servers(path, tool_directory=path.parent)
             extra_name, extra = next(iter(addition.items()))
             extra = json.loads(json.dumps(extra))
             extra["args"].extend(
@@ -336,12 +413,10 @@ async def _native_row(row: dict, frozen: dict, model: str,
         actual, bindings = _raw_tools(
             client, row, mapping, session_roles, engine.plan)
         print(json.dumps({"phase": "raw_tools_end", "case_id": row["case_id"], "attacked": attacked, "tools": len(actual)}), flush=True)
-        print(json.dumps({"phase": "place_catalog_wait", "case_id": row["case_id"], "attacked": attacked}), flush=True)
-        with _PLACE_CATALOG_LOCK:
-            print(json.dumps({"phase": "place_catalog_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
-            shown, _basis, proposals = _place_catalog(
-                episode, row["agent"], actual)
-            print(json.dumps({"phase": "place_catalog_end", "case_id": row["case_id"], "attacked": attacked, "shown": len(shown), "plant_cache_hits": getattr(episode.plant, "cache_hits", None), "plant_placement_calls": getattr(episode.plant, "placement_calls", None)}), flush=True)
+        print(json.dumps({"phase": "place_catalog_begin", "case_id": row["case_id"], "attacked": attacked}), flush=True)
+        shown, _basis, proposals = _place_catalog(
+            episode, row["agent"], actual)
+        print(json.dumps({"phase": "place_catalog_end", "case_id": row["case_id"], "attacked": attacked, "shown": len(shown), "plant_cache_hits": getattr(episode.plant, "cache_hits", None), "plant_placement_calls": getattr(episode.plant, "placement_calls", None)}), flush=True)
         shown_by_name = {tool["name"]: tool["description"] for tool in shown}
         prompt_injection = ""
         if attacked and "prompt_injection" in row["attack_type"]:
@@ -469,15 +544,18 @@ async def _native_row(row: dict, frozen: dict, model: str,
                 attack_context, row["attack_task"])
     audit = episode.close()
     mode = "attack" if attacked else "clean"
+    unit_receipts = broker.invocation_receipts()
+    scoring_row = {**row, "unit_broker": unit_receipts}
     return {
         "dataset": "MSB", "suite": row["attack_type"], "mode": mode,
-        "task": row["task"], "contract": contract.to_dict(),
+        "task": row.get("_frozen_task", row["task"]),
+        "runtime_task": row["task"], "contract": contract.to_dict(),
         "manifest_count": len(registrations),
         "manifest_source": "clean MCP tools/list snapshot",
         "case_id": row["case_id"], "attack_task": row["attack_task"],
         "attack_payload": payload if attacked else "",
         "proposals": proposals, "decisions": decisions,
-        "utility": _msb_utility_passed(row, decisions),
+        "utility": _msb_utility_passed(scoring_row, decisions),
         # MSB calls attack-side utility PUA.  Its official report leaves PUA
         # undefined when the attack construction precludes task completion;
         # retain the task-completion witness above for our all-case AU, while
@@ -487,7 +565,7 @@ async def _native_row(row: dict, frozen: dict, model: str,
             attacked and official_effect["attack_success"]),
         "official_effect": official_effect,
         "response": response,
-        "unit_broker": broker.invocation_receipts(), "audit": audit,
+        "unit_broker": unit_receipts, "audit": audit,
     }
 
 
@@ -511,6 +589,23 @@ def _failure_ids(path: Path, modes: set[str]) -> set[str]:
     }
 
 
+def _interleave_jobs_by_contract(jobs: list[tuple[dict, dict]]):
+    """Round-robin contracts so workers do not queue on identical cache keys."""
+    groups: dict[str, list[tuple[dict, dict]]] = {}
+    for job in jobs:
+        groups.setdefault(_msb_contract_key(job[0]), []).append(job)
+    ordered = []
+    active = list(groups.values())
+    while active:
+        remaining = []
+        for group in active:
+            ordered.append(group.pop(0))
+            if group:
+                remaining.append(group)
+        active = remaining
+    return ordered
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="deepseek-v4-flash")
@@ -530,6 +625,8 @@ def main() -> None:
                         help="read-only reviewed Contract catalog to reuse")
     parser.add_argument("--contracts-output", type=Path,
                         help="deprecated alias for --contracts-input")
+    parser.add_argument("--plant-cache", type=Path,
+                        help="persistent JSONL cache for PLANT proposals")
     parser.add_argument("--frozen-contracts-only", action="store_true",
                         help="fail if any selected case is absent from contracts-input")
     parser.add_argument("--output", type=Path, required=True)
@@ -609,15 +706,23 @@ def main() -> None:
             missing_contracts.append((row["case_id"], key))
             continue
         frozen = entry["contract"]
-        jobs.append((row, frozen))
+        jobs.append(_runtime_inputs(row, frozen))
     if missing_contracts:
         examples = "; ".join(
             f"{case_id}:{key}" for case_id, key in missing_contracts[:10])
         raise ValueError(
             "frozen MSB contracts missing "
             f"{len(missing_contracts)} selected cases; examples: {examples}")
+    jobs = _interleave_jobs_by_contract(jobs)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    plant_cache = {}
+    plant_cache_path = (args.plant_cache or args.output.with_suffix(
+        ".plant-cache.jsonl"))
+    plant_cache = ConcurrentPersistentCache(
+        plant_cache_path,
+        namespace={"runner": "msb-native-v2", "model": args.contract_model})
+    print(json.dumps({"phase": "plant_cache_loaded",
+                      "path": str(plant_cache_path),
+                      "entries": len(plant_cache)}), flush=True)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
         pending = {
             pool.submit(_native_case, row, frozen, args.model,

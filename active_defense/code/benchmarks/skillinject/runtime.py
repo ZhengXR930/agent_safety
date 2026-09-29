@@ -85,6 +85,29 @@ def _runtime_environment(runtime: str) -> dict[str, str]:
         env["NODE_PATH"] = str(_RUNTIME_ROOT / "node_modules")
     return env
 
+
+def _sandboxed_command(runtime: str, script: Path, argv, *,
+                       allow_network: bool) -> list[str]:
+    """Build the platform-native process-isolation command.
+
+    Linux uses user/network namespaces. macOS has no ``unshare``; for
+    agent-authored scripts, use the native sandbox profile to deny network.
+    Digest-pinned helpers retain their declared service access.
+    """
+    binary = _runtime_binary(runtime)
+    unshare = shutil.which("unshare")
+    if unshare:
+        flags = "-Ur" if allow_network else "-Urn"
+        return [unshare, flags, binary, str(script), *argv]
+    sandbox_exec = shutil.which("sandbox-exec")
+    if sys.platform == "darwin" and sandbox_exec and not allow_network:
+        return [sandbox_exec, "-p",
+                "(version 1) (allow default) (deny network*)",
+                binary, str(script), *argv]
+    if sys.platform == "darwin" and allow_network:
+        return [binary, str(script), *argv]
+    raise RuntimeError("no supported process-isolation backend")
+
 def safe_path(workspace: Path, raw: str) -> Path:
     path = (workspace / raw).resolve()
     if not path.is_relative_to(workspace.resolve()):
@@ -143,7 +166,10 @@ class SkillInjectRuntime:
     """Run one SkillInject sandbox through the active defense."""
 
     def __init__(self, sandbox, defense_model: str, *,
-                 target_model: str = "deepseek-chat", skill_manifest=None):
+                 target_model: str = "deepseek-chat", skill_manifest=None,
+                 wrap_enabled: bool = True,
+                 plant_enabled: bool = True,
+                 continuation_enabled: bool = True):
         self.sandbox = Sandbox.discover(sandbox)
         self.target_model = target_model
         self.skill_layout = SkillSurfaceCompiler().compile(
@@ -151,7 +177,9 @@ class SkillInjectRuntime:
         # This benchmark measures autonomous safety and utility.  A WRAP proof
         # failure is a denial, never a simulated user approval.
         self.engine = Engine(
-            defense_model, approval_enabled=False)
+            defense_model, approval_enabled=False,
+            wrap_enabled=wrap_enabled, plant_enabled=plant_enabled,
+            continuation_enabled=continuation_enabled)
         skill_name = self.sandbox.skill_file.parent.name
         self.tools, generated_skill = skill_registration(skill_name)
         registrations = [
@@ -353,8 +381,8 @@ class SkillInjectRuntime:
                 try:
                     with broker.execution(prepared):
                         result = subprocess.run(
-                            ["unshare", "-Urn", _runtime_binary(runtime),
-                             str(path), *argv],
+                            _sandboxed_command(
+                                runtime, path, argv, allow_network=False),
                             cwd=workspace,
                             capture_output=True, text=True, timeout=45,
                             env=_runtime_environment(runtime))
@@ -395,7 +423,6 @@ class SkillInjectRuntime:
                     return "helper error: installed helper is not operator-registered"
                 try:
                     runtime_name = implementation["runtime"]
-                    runtime = _runtime_binary(runtime_name)
                     environment = _runtime_environment(runtime_name)
                     environment.update({
                         str(name): str(value)
@@ -406,7 +433,9 @@ class SkillInjectRuntime:
                         result = subprocess.run(
                             # Digest-pinned helpers may reach their declared
                             # service. Agent-authored scripts above stay offline.
-                            ["unshare", "-Ur", runtime, str(helper), *argv],
+                            _sandboxed_command(
+                                runtime_name, helper, argv,
+                                allow_network=True),
                             cwd=workspace, capture_output=True, text=True,
                             timeout=45, env=environment)
                     value = ((result.stdout + result.stderr)[-12000:] or

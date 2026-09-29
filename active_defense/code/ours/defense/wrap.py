@@ -90,18 +90,25 @@ def _trace_argument(state: RuntimeState, spec, value, equal,
                     allow_semantic=False, exact_only=False):
     """Return deterministic proof refs for one Effect argument.
 
-    Semantic/model grounding may help the Binding Agent choose candidate
-    evidence, but it is not an authorization proof at the Effect boundary.
-    Every committed argument must reduce to trusted literals, exact receipt
-    projection, closed deterministic replay, or an already committed Effect.
+    Semantic/model grounding may close only a Contract-declared argument whose
+    registered capability surface explicitly permits semantic support.  It can
+    never close an exact-only or delegated authority position.  In particular,
+    the model selects evidence for a declared Derive role; it does not create a
+    new Effect, argument position, or source of authority.
     """
-    del grounded_refs, semantic_refs, allow_semantic
 
     def deterministic(refs):
         refs = tuple(dict.fromkeys(map(str, refs or ())))
         if not refs:
             return ()
         if {SEMANTIC_REF, GROUNDED_REF}.intersection(refs):
+            return ()
+        return refs
+
+    def semantic(refs):
+        refs = tuple(dict.fromkeys(map(str, refs or ())))
+        if (not allow_semantic or exact_only or not refs or
+                not {SEMANTIC_REF, GROUNDED_REF}.intersection(refs)):
             return ()
         return refs
 
@@ -114,10 +121,14 @@ def _trace_argument(state: RuntimeState, spec, value, equal,
             resolved = state.output(source)
             if resolved is not UNRESOLVED and equal(resolved, value):
                 binding = state.bindings.get(str(source).partition(".")[0])
-                refs = deterministic(() if binding is None else binding.refs)
+                raw_refs = () if binding is None else binding.refs
+                refs = deterministic(raw_refs) or semantic(raw_refs)
                 if refs:
                     return True, refs
         refs = deterministic(exact_refs)
+        if refs:
+            return True, refs
+        refs = semantic(grounded_refs) or semantic(semantic_refs)
         if refs:
             return True, refs
         return (False, ())
@@ -171,9 +182,6 @@ def _check_clause(state: RuntimeState, contract, clause: EffectClause,
             name in content,
             name in exact_only)
         if not ok:
-            return Verdict(False, f"untraceable-arg:{name}")
-        if any(str(ref) in {SEMANTIC_REF, GROUNDED_REF}
-               for ref in proof_refs):
             return Verdict(False, f"untraceable-arg:{name}")
         refs.extend(proof_refs)
 

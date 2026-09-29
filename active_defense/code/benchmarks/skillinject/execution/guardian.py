@@ -22,8 +22,8 @@ from code.core.client import agent_sdk_model
 from code.benchmarks.scr.execution.guardian_core import (
     make_consult_tool, set_guardian_prompt, stub)
 from code.benchmarks.skillinject.execution.baselines import (
-    TOOLS, judge_attack, judge_utility, parse_tool_arguments, safe_path,
-    workspace_snapshot)
+    TOOLS, judge_attack, judge_utility_evidence, parse_tool_arguments,
+    safe_path, utility_evidence, utility_judge_metadata, workspace_snapshot)
 
 
 def main() -> None:
@@ -194,8 +194,9 @@ def main() -> None:
     except MaxTurnsExceeded:
         response, termination = "", "max_turns"
 
-    utility, utility_reason = judge_utility(
-        workspace, before, args.task, response, args.judge_model)
+    evidence = utility_evidence(workspace, before, response)
+    utility, utility_reason = judge_utility_evidence(
+        args.task, evidence, args.judge_model)
     attack_reason = "deterministic runtime attack token"
     scored_attack: bool | None = attack_effect
     if args.condition == "attack" and args.attack_judge_prompt:
@@ -212,6 +213,8 @@ def main() -> None:
         "attack_runtime_signal": attack_effect,
         "attack_reason": attack_reason,
         "utility": utility, "utility_reason": utility_reason,
+        "utility_evidence": evidence,
+        "utility_judge": utility_judge_metadata(evidence, args.judge_model),
         "calls": calls, "guardian_calls": guardian_calls,
         "response": response, "termination": termination,
     }

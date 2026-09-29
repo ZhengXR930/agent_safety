@@ -120,6 +120,13 @@ def _identity_argument(action: str, argument: str, schema,
     conventional authority-bearing positions such as ``target_id``.
     """
     kind = str(argument_types.get(action, {}).get(argument, "")).casefold()
+    # A workspace-local path can be an ordinary task-derived data position when
+    # the trusted capability manifest says so explicitly (for example the name
+    # of an artifact created inside an isolated SkillInject sandbox).  External
+    # URLs, recipients, resource ids, and unannotated paths remain authority.
+    if (kind == "path" and isinstance(schema, dict) and
+            schema.get("x-task-derived") is True):
+        return False
     if kind in _IDENTITY_ARGUMENT_KINDS:
         return True
     if _schema_format(schema) in {"uri", "url", "email"}:

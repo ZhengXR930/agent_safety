@@ -606,22 +606,31 @@ class Plant:
         sinks = list(self._effect_sinks.get(str(source), ()))
         key = (self._contract_digest, str(source), digest(value), modes,
                digest(schema), digest(sinks), digest(surface_cards))
-        if key in self.cache:
-            self.cache_hits += 1
-        else:
+        def compute():
             self.placement_calls += 1
             try:
-                self.cache[key] = self.placement_agent(
+                return self.placement_agent(
                     contract=self.contract.to_dict(), source=str(source),
                     value=value, modes=modes, schema=schema,
                     reachable_sinks=sinks, surface_cards=surface_cards)
             except Exception as exc:  # semantic role failure is fail-safe abstain
                 self.invalid_proposals += 1
-                self.cache[key] = {
+                return {
                     "status": "abstain", "placements": [],
                     "reason": "placement agent error: " + type(exc).__name__ + ":" + str(exc)[:160],
                 }
-        proposal = self.cache[key]
+
+        get_or_compute = getattr(self.cache, "get_or_compute", None)
+        if callable(get_or_compute):
+            proposal, reused = get_or_compute(key, compute)
+            if reused:
+                self.cache_hits += 1
+        elif key in self.cache:
+            self.cache_hits += 1
+            proposal = self.cache[key]
+        else:
+            proposal = compute()
+            self.cache[key] = proposal
         if (not isinstance(proposal, dict) or
                 set(proposal) != {"status", "placements", "reason"} or
                 not isinstance(proposal.get("placements"), list)):

@@ -382,7 +382,7 @@ class RuntimeAuthorityBoundaryTests(unittest.TestCase):
         self.assertFalse(verdict.ok)
         self.assertEqual("untraceable-arg:device", verdict.reason)
 
-    def test_semantic_content_proof_cannot_close_effect_argument(self):
+    def test_semantic_content_proof_closes_declared_semantic_argument(self):
         contract = TaskContract("send the requested summary", [
             DeriveClause("", "write summary", ("task",), "body"),
             EffectClause("", "send", "send", {
@@ -393,8 +393,9 @@ class RuntimeAuthorityBoundaryTests(unittest.TestCase):
             RuntimeState(), contract, "send", {"body": "semantic summary"},
             content={"body"},
             semantic_proofs={key: (SEMANTIC_REF, "receipt#/body")})
-        self.assertFalse(verdict.ok)
-        self.assertEqual("untraceable-arg:body", verdict.reason)
+        self.assertTrue(verdict.ok)
+        self.assertEqual("traced", verdict.reason)
+        self.assertEqual((SEMANTIC_REF, "receipt#/body"), verdict.refs)
 
     def test_restriction_blocks_model_proofs_but_not_exact_proof(self):
         contract = TaskContract("share the selected file", [
